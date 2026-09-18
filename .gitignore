@@ -1,0 +1,60 @@
+# OS and editor noise
+.DS_Store
+Thumbs.db
+~$*
+.idea/
+.vscode/
+
+# Local secrets and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+
+# Python caches, virtual environments, and build output
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+
+# Node/Next.js dependencies and generated output
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Browser test captures and local run output
+.playwright-cli/
+output/
+
+# Generated knowledge-graph artifacts
+graphify-out/
+
+# Local database state and snapshot bundles
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+*.dump.*
+cbom-catalog/snapshots/*
+!cbom-catalog/snapshots/README.md
+
+# Raw externally shared assessment corpora are read-only evidence, not source
+# control inputs. Keep them locally for ingestion and workspace tests.
+/SSE_CBOMS/
+/OneDrive_1_9-18-2026/

@@ -1,0 +1,228 @@
+{
+  "generated_at_utc": "2026-09-17T11:21:20Z",
+  "catalog_version": "0.1.0",
+  "validation_scope": "SSE_CBOMS workspace corpus",
+  "source_manifest": {
+    "root": "SSE_CBOMS",
+    "files": 582,
+    "bytes": 319770141,
+    "sha256": "1539b4bcdb1bdb01a49956443ab29e8a8788b069d417f4012396fc12efff443c",
+    "algorithm": "Sort POSIX relative paths lexicographically; for each file hash UTF-8 path, NUL, raw 32-byte SHA-256(content), newline",
+    "compose_mount": "read-only"
+  },
+  "runtime": {
+    "application_image": "sha256:588550526d6d675e310d35faceff0672b3963b9dd8a0aa8b724c6f67e4111a09",
+    "application_platform": "linux/arm64",
+    "postgres_image": "postgres:16-alpine",
+    "compose_project": "cbom-catalog-final"
+  },
+  "schema": {
+    "version": 6,
+    "migrations": [
+      "001 initial catalog schema",
+      "002 multi-source provenance, relationship integrity, and query indexes",
+      "003 immutable external observation payloads",
+      "004 collection-scoped service groups",
+      "005 relational OSCAL parent links",
+      "006 source checksum history and refresh gate"
+    ],
+    "idempotent_rerun": "pass; all six migrations skipped as already applied"
+  },
+  "tests": {
+    "python_ast": {
+      "result": "pass",
+      "files": 13
+    },
+    "unit_and_workspace_samples": {
+      "command": "docker run --rm with tests and SSE_CBOMS mounted read-only, then python -m unittest discover -s /app/tests -v",
+      "passed": 12,
+      "failed": 0
+    },
+    "compose_config": "pass",
+    "container_build": "pass",
+    "api_health": "HTTP 200",
+    "raw_document_gate_default": "HTTP 403",
+    "dependency_closure_sample": {
+      "result": "HTTP 200",
+      "edges": 24,
+      "relationship_types": [
+        "DEPENDS_ON"
+      ]
+    },
+    "collection_scope_rollback_probe": {
+      "result": "pass",
+      "same_slug_received_distinct_ids": true,
+      "persisted": false
+    },
+    "oscal_parent_insert_rollback_probe": {
+      "result": "pass",
+      "parent_link_resolved": true,
+      "persisted": false
+    },
+    "checksum_refresh_probe": {
+      "result": "pass",
+      "outcomes": [
+        "loaded",
+        "unchanged",
+        "loaded"
+      ],
+      "fingerprint_versions": 2,
+      "verification_observations": 3,
+      "persisted": false
+    }
+  },
+  "ingest_runs": [
+    {
+      "id": 1,
+      "purpose": "clean full-corpus ingestion",
+      "started_at_utc": "2026-09-17T10:36:58.905200Z",
+      "completed_at_utc": "2026-09-17T10:38:59.475772Z",
+      "status": "completed_with_errors",
+      "files_seen": 582,
+      "files_loaded": 579,
+      "files_linked": 1,
+      "files_unchanged": 0,
+      "files_failed": 2,
+      "note": "Both failures are known zero-byte inputs; no non-empty parse error occurred"
+    },
+    {
+      "id": 2,
+      "purpose": "10-file idempotency sample after schema hardening",
+      "started_at_utc": "2026-09-17T10:51:56.548784Z",
+      "completed_at_utc": "2026-09-17T10:51:56.615301Z",
+      "status": "completed",
+      "files_seen": 10,
+      "files_loaded": 0,
+      "files_linked": 10,
+      "files_unchanged": 0,
+      "files_failed": 0
+    },
+    {
+      "id": 3,
+      "purpose": "10-file checksum refresh gate sample",
+      "started_at_utc": "2026-09-17T11:13:13.306947Z",
+      "completed_at_utc": "2026-09-17T11:13:13.378603Z",
+      "status": "completed",
+      "files_seen": 10,
+      "files_loaded": 0,
+      "files_linked": 0,
+      "files_unchanged": 10,
+      "files_failed": 0
+    },
+    {
+      "id": 4,
+      "purpose": "complete checksum-gated corpus refresh",
+      "started_at_utc": "2026-09-17T11:13:30.682502Z",
+      "completed_at_utc": "2026-09-17T11:13:31.740822Z",
+      "status": "completed",
+      "files_seen": 582,
+      "files_loaded": 0,
+      "files_linked": 0,
+      "files_unchanged": 582,
+      "files_failed": 0
+    },
+    {
+      "id": 7,
+      "purpose": "forced parser-validation sample over unchanged bytes",
+      "started_at_utc": "2026-09-17T11:20:37.421493Z",
+      "completed_at_utc": "2026-09-17T11:20:37.472909Z",
+      "status": "completed",
+      "force_reprocess": true,
+      "files_seen": 1,
+      "files_loaded": 0,
+      "files_linked": 1,
+      "files_unchanged": 0,
+      "files_failed": 0
+    }
+  ],
+  "catalog_counts": {
+    "source_collections": 1,
+    "scoped_service_groups": 38,
+    "distinct_service_group_slugs": 38,
+    "source_files": 582,
+    "fingerprinted_source_files": 582,
+    "fingerprint_versions": 582,
+    "fingerprint_verification_observations": 1175,
+    "paths_with_multiple_fingerprints": 0,
+    "unique_documents": 579,
+    "artifacts": 402,
+    "unique_components": 60132,
+    "component_occurrences": 289090,
+    "dependency_edges": 139778,
+    "vulnerabilities": 0,
+    "external_records": 321,
+    "database_bytes": 813931543
+  },
+  "source_file_status": {
+    "loaded": 569,
+    "linked": 11,
+    "empty": 2
+  },
+  "format_coverage": [
+    {
+      "kind": "cyclonedx",
+      "spec_version": "1.6",
+      "unique_documents": 535,
+      "source_files": 536,
+      "component_occurrences": 284511
+    },
+    {
+      "kind": "cyclonedx",
+      "spec_version": "1.7",
+      "unique_documents": 1,
+      "source_files": 1,
+      "component_occurrences": 394
+    },
+    {
+      "kind": "spdx",
+      "spec_version": "2.3",
+      "unique_documents": 14,
+      "source_files": 14,
+      "component_occurrences": 4185
+    },
+    {
+      "kind": "oscal_assessment_results",
+      "unique_documents": 13,
+      "source_files": 13,
+      "component_occurrences": 0
+    },
+    {
+      "kind": "fips_tool_report",
+      "unique_documents": 12,
+      "source_files": 12,
+      "component_occurrences": 0
+    },
+    {
+      "kind": "crypto_inventory_csv",
+      "unique_documents": 2,
+      "source_files": 2,
+      "component_occurrences": 0
+    },
+    {
+      "kind": "cbom_generation_summary",
+      "unique_documents": 1,
+      "source_files": 1,
+      "component_occurrences": 0
+    },
+    {
+      "kind": "scan_index",
+      "unique_documents": 1,
+      "source_files": 1,
+      "component_occurrences": 0
+    }
+  ],
+  "quality": {
+    "ingest_errors": 0,
+    "empty_file_warnings": 2,
+    "duplicate_bom_ref_warnings": 7,
+    "oscal_child_records": 124,
+    "oscal_child_records_with_parent_link": 124,
+    "source_files_with_source_uri": 582,
+    "source_document_checksum_mismatches": 0
+  },
+  "limitations": [
+    "Parsing success is not formal CycloneDX, SPDX, or OSCAL JSON Schema certification",
+    "The source manifest is a reproducibility baseline; filesystem immutability is enforced only by the Compose read-only ingester mount",
+    "The bundled API has no production authentication layer and must remain behind an authenticated gateway outside local use"
+  ]
+}

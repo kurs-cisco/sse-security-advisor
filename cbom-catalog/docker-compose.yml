@@ -1,0 +1,122 @@
+name: cbom-catalog
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cbom_catalog}
+      POSTGRES_USER: ${POSTGRES_USER:-cbom}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cbom_local_only}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cbom} -d ${POSTGRES_DB:-cbom_catalog}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  migrate:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-cbom_local_only}
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-cbom}
+      PGDATABASE: ${POSTGRES_DB:-cbom_catalog}
+    volumes:
+      - ./db:/db:ro
+    command:
+      - sh
+      - -ec
+      - sh /db/migrate.sh
+
+  api:
+    image: ${CBOM_CATALOG_IMAGE:-cbom-catalog:local}
+    build:
+      context: .
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      PGHOST: ${DATABASE_HOST:-postgres}
+      PGPORT: ${DATABASE_PORT:-5432}
+      PGDATABASE: ${POSTGRES_DB:-cbom_catalog}
+      PGUSER: ${POSTGRES_USER:-cbom}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-cbom_local_only}
+      CBOM_API_PAGE_SIZE: ${CBOM_API_PAGE_SIZE:-100}
+      CBOM_API_ALLOW_RAW: ${CBOM_API_ALLOW_RAW:-false}
+      CBOM_API_POOL_MIN_SIZE: ${CBOM_API_POOL_MIN_SIZE:-2}
+      CBOM_API_POOL_MAX_SIZE: ${CBOM_API_POOL_MAX_SIZE:-8}
+      CBOM_API_STATEMENT_TIMEOUT_MS: ${CBOM_API_STATEMENT_TIMEOUT_MS:-20000}
+      CBOM_ENVIRONMENT: ${CBOM_ENVIRONMENT:-local}
+      CBOM_API_AUTH_MODE: ${CBOM_API_AUTH_MODE:-disabled}
+      CBOM_API_BEARER_TOKEN: ${CBOM_API_BEARER_TOKEN:-}
+      CBOM_CORS_ORIGINS: ${CBOM_CORS_ORIGINS:-}
+      CBOM_ASSESSMENT_TIMEZONE: ${CBOM_ASSESSMENT_TIMEZONE:-Asia/Kolkata}
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ../cbom-console
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-node:22-alpine}
+        CBOM_API_ORIGIN: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      CBOM_API_ORIGIN: http://api:8000
+      CBOM_API_BEARER_TOKEN: ${CBOM_API_BEARER_TOKEN:-}
+      CBOM_AUTH_MODE: ${CBOM_AUTH_MODE:-dev}
+      CBOM_ALLOW_INSECURE_DEV_AUTH: ${CBOM_ALLOW_INSECURE_DEV_AUTH:-true}
+      NEXT_TELEMETRY_DISABLED: "1"
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  ingest:
+    image: ${CBOM_CATALOG_IMAGE:-cbom-catalog:local}
+    build:
+      context: .
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+    profiles: ["tools"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      PGHOST: ${DATABASE_HOST:-postgres}
+      PGPORT: ${DATABASE_PORT:-5432}
+      PGDATABASE: ${POSTGRES_DB:-cbom_catalog}
+      PGUSER: ${POSTGRES_USER:-cbom}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-cbom_local_only}
+      CBOM_STORE_RAW_JSON: ${CBOM_STORE_RAW_JSON:-true}
+      CBOM_SOURCE_COLLECTION: ${CBOM_SOURCE_COLLECTION:-sse-cboms}
+      CBOM_SOURCE_URI: ${CBOM_SOURCE_URI:-}
+      CBOM_FORCE_REPROCESS: ${CBOM_FORCE_REPROCESS:-false}
+      CBOM_AUTHORITATIVE_SNAPSHOT: ${CBOM_AUTHORITATIVE_SNAPSHOT:-false}
+    volumes:
+      - ${CBOM_CORPUS_ROOT:-../SSE_CBOMS}:/data/SSE_CBOMS:ro
+    command: ["cbom-catalog", "ingest", "/data/SSE_CBOMS"]
+
+volumes:
+  postgres-data:

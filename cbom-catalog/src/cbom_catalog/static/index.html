@@ -1,0 +1,711 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      name="description"
+      content="Explore CBOM, SBOM, provenance, dependency, evidence, and refresh-integrity data."
+    />
+    <title>CBOM Workbench</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./app.css" />
+    <script defer src="./app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to catalog content</a>
+
+    <svg class="icon-sprite" aria-hidden="true">
+      <symbol id="i-grid" viewBox="0 0 24 24">
+        <rect x="3" y="3" width="7" height="7" rx="1" />
+        <rect x="14" y="3" width="7" height="7" rx="1" />
+        <rect x="3" y="14" width="7" height="7" rx="1" />
+        <rect x="14" y="14" width="7" height="7" rx="1" />
+      </symbol>
+      <symbol id="i-table" viewBox="0 0 24 24">
+        <rect x="3" y="4" width="18" height="16" rx="2" />
+        <path d="M3 9h18M9 9v11" />
+      </symbol>
+      <symbol id="i-graph" viewBox="0 0 24 24">
+        <circle cx="6" cy="6" r="2.5" />
+        <circle cx="18" cy="7" r="2.5" />
+        <circle cx="12" cy="18" r="2.5" />
+        <path d="m8.4 6.2 7.1.6M7.4 8.1l3.4 7.6M16.7 9.2l-3.3 6.6" />
+      </symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24">
+        <path d="M12 3 5 6v5c0 4.8 2.7 8 7 10 4.3-2 7-5.2 7-10V6l-7-3Z" />
+        <path d="m9 12 2 2 4-5" />
+      </symbol>
+      <symbol id="i-search" viewBox="0 0 24 24">
+        <circle cx="11" cy="11" r="7" />
+        <path d="m20 20-4-4" />
+      </symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24">
+        <path d="M20 7v5h-5M4 17v-5h5" />
+        <path d="M6.1 9a7 7 0 0 1 11.6-2.6L20 9M4 15l2.3 2.6A7 7 0 0 0 18 15" />
+      </symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24">
+        <path d="m9 18 6-6-6-6" />
+      </symbol>
+      <symbol id="i-close" viewBox="0 0 24 24">
+        <path d="M6 6l12 12M18 6 6 18" />
+      </symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24">
+        <path d="M20 15.5A8 8 0 0 1 8.5 4 8.2 8.2 0 1 0 20 15.5Z" />
+      </symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="4" />
+        <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+      </symbol>
+      <symbol id="i-file" viewBox="0 0 24 24">
+        <path d="M6 2h8l4 4v16H6zM14 2v5h5M9 12h6M9 16h6" />
+      </symbol>
+      <symbol id="i-package" viewBox="0 0 24 24">
+        <path d="m4 7 8-4 8 4-8 4-8-4ZM4 7v10l8 4 8-4V7M12 11v10" />
+      </symbol>
+      <symbol id="i-link" viewBox="0 0 24 24">
+        <path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.1 1.1M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.1-1.1" />
+      </symbol>
+      <symbol id="i-database" viewBox="0 0 24 24">
+        <ellipse cx="12" cy="5" rx="8" ry="3" />
+        <path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7" />
+      </symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24">
+        <path d="M12 3 2.8 20h18.4L12 3Z" />
+        <path d="M12 9v5M12 17.5v.1" />
+      </symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24">
+        <rect x="8" y="8" width="12" height="12" rx="2" />
+        <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+      </symbol>
+    </svg>
+
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Primary navigation">
+        <div class="brand-block">
+          <div class="brand-mark" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </div>
+          <div>
+            <p class="brand-kicker">Supply-chain intelligence</p>
+            <p class="brand-name">CBOM <span>//</span> Workbench</p>
+          </div>
+        </div>
+
+        <nav class="primary-nav">
+          <button class="nav-item is-active" type="button" data-view="overview" aria-current="page">
+            <svg class="icon"><use href="#i-grid"></use></svg>
+            <span>Overview</span>
+          </button>
+          <button class="nav-item" type="button" data-view="inventory">
+            <svg class="icon"><use href="#i-table"></use></svg>
+            <span>Inventory</span>
+          </button>
+          <button class="nav-item" type="button" data-view="graph">
+            <svg class="icon"><use href="#i-graph"></use></svg>
+            <span>Dependencies</span>
+          </button>
+          <button class="nav-item" type="button" data-view="integrity">
+            <svg class="icon"><use href="#i-shield"></use></svg>
+            <span>Refresh integrity</span>
+          </button>
+          <button class="nav-item" type="button" data-view="fips">
+            <svg class="icon"><use href="#i-alert"></use></svg>
+            <span>FIPS / POA&amp;M</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-foot">
+          <div class="connection-state" id="connection-state" role="status">
+            <span class="status-dot"></span>
+            <span>Checking catalog</span>
+          </div>
+          <a href="/docs" target="_blank" rel="noreferrer">
+            API reference
+            <svg class="icon icon-sm"><use href="#i-chevron"></use></svg>
+          </a>
+        </div>
+      </aside>
+
+      <div class="workspace">
+        <header class="scope-bar">
+          <div class="title-stack">
+            <p class="eyebrow">Catalog workspace</p>
+            <h1 id="page-title">Overview</h1>
+          </div>
+
+          <form class="global-search" id="global-search-form" role="search">
+            <svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg>
+            <label class="sr-only" for="global-search">Search components and packages</label>
+            <input
+              id="global-search"
+              name="query"
+              type="search"
+              autocomplete="off"
+              placeholder="Search component, PURL, or CPE"
+            />
+            <kbd>/</kbd>
+          </form>
+
+          <div class="scope-controls" aria-label="Catalog scope">
+            <label>
+              <span>Collection</span>
+              <select id="collection-filter">
+                <option value="">All collections</option>
+              </select>
+            </label>
+            <label>
+              <span>Service group</span>
+              <select id="group-filter" disabled>
+                <option value="">All service groups</option>
+              </select>
+            </label>
+            <button class="icon-button" id="theme-toggle" type="button" aria-label="Use dark theme">
+              <svg class="icon theme-icon-light"><use href="#i-moon"></use></svg>
+              <svg class="icon theme-icon-dark"><use href="#i-sun"></use></svg>
+            </button>
+          </div>
+        </header>
+
+        <div class="scope-strip" aria-live="polite">
+          <span class="scope-label">Active scope</span>
+          <strong id="scope-summary">All collections</strong>
+          <span class="scope-divider" aria-hidden="true"></span>
+          <span id="freshness-summary">Loading catalog state…</span>
+          <button class="text-button" id="clear-scope" type="button" hidden>Clear scope</button>
+        </div>
+
+        <main id="main-content" tabindex="-1">
+          <section class="view-panel" id="overview-view" data-panel="overview">
+            <div class="section-heading">
+              <div>
+                <p class="section-kicker">Operational picture</p>
+                <h2>What is in this catalog?</h2>
+                <p>Normalized inventory, provenance, evidence, and refresh health for the active scope.</p>
+              </div>
+              <button class="button button-secondary" id="reload-overview" type="button">
+                <svg class="icon"><use href="#i-refresh"></use></svg>
+                Refresh view
+              </button>
+            </div>
+
+            <div class="metric-grid" id="metric-grid" aria-label="Catalog summary">
+              <article class="metric-card metric-primary">
+                <div class="metric-icon"><svg class="icon"><use href="#i-file"></use></svg></div>
+                <p>Unique documents</p>
+                <strong id="metric-documents">—</strong>
+                <span id="metric-documents-note">Normalized source records</span>
+              </article>
+              <article class="metric-card">
+                <div class="metric-icon"><svg class="icon"><use href="#i-package"></use></svg></div>
+                <p>Canonical components</p>
+                <strong id="metric-components">—</strong>
+                <span id="metric-components-note">Across all BOM observations</span>
+              </article>
+              <article class="metric-card">
+                <div class="metric-icon"><svg class="icon"><use href="#i-database"></use></svg></div>
+                <p>Component occurrences</p>
+                <strong id="metric-occurrences">—</strong>
+                <span id="metric-occurrences-note">Document-scoped identities</span>
+              </article>
+              <article class="metric-card">
+                <div class="metric-icon"><svg class="icon"><use href="#i-link"></use></svg></div>
+                <p>Relationship edges</p>
+                <strong id="metric-edges">—</strong>
+                <span id="metric-edges-note">Only where producers supplied them</span>
+              </article>
+              <article class="metric-card metric-compact">
+                <p>Source files</p>
+                <strong id="metric-files">—</strong>
+              </article>
+              <article class="metric-card metric-compact">
+                <p>Artifacts</p>
+                <strong id="metric-artifacts">—</strong>
+              </article>
+              <article class="metric-card metric-compact">
+                <p>Evidence records</p>
+                <strong id="metric-evidence">—</strong>
+              </article>
+              <article class="metric-card metric-compact" id="metric-errors-card">
+                <p>Ingest errors</p>
+                <strong id="metric-errors">—</strong>
+              </article>
+            </div>
+
+            <div class="dashboard-grid">
+              <article class="card card-wide">
+                <header class="card-header">
+                  <div>
+                    <p class="card-kicker">Format coverage</p>
+                    <h3>Documents by standard and version</h3>
+                  </div>
+                  <button class="text-button" type="button" data-open-inventory="documents">View documents</button>
+                </header>
+                <div id="format-chart" class="bar-chart" aria-live="polite"></div>
+                <p class="chart-summary" id="format-summary"></p>
+              </article>
+
+              <article class="card">
+                <header class="card-header">
+                  <div>
+                    <p class="card-kicker">Composition</p>
+                    <h3>Component types</h3>
+                  </div>
+                  <button class="text-button" type="button" data-open-inventory="components">Explore</button>
+                </header>
+                <div id="component-chart" class="bar-chart bar-chart-compact" aria-live="polite"></div>
+              </article>
+
+              <article class="card card-wide">
+                <header class="card-header">
+                  <div>
+                    <p class="card-kicker">Ownership map</p>
+                    <h3>Service groups</h3>
+                  </div>
+                  <span class="quiet-label" id="service-group-count">— groups</span>
+                </header>
+                <div id="service-group-chart" class="rank-chart" aria-live="polite"></div>
+                <div class="table-frame table-frame-compact">
+                  <table>
+                    <caption class="sr-only">Service groups in the active scope</caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">Collection / group</th>
+                        <th scope="col" class="numeric">Files</th>
+                        <th scope="col" class="numeric">Documents</th>
+                        <th scope="col" class="numeric">Issues</th>
+                      </tr>
+                    </thead>
+                    <tbody id="service-group-table"></tbody>
+                  </table>
+                </div>
+              </article>
+
+              <article class="card">
+                <header class="card-header">
+                  <div>
+                    <p class="card-kicker">Latest refresh</p>
+                    <h3>Fingerprint gate</h3>
+                  </div>
+                  <button class="text-button" type="button" data-go-view="integrity">Audit</button>
+                </header>
+                <div id="refresh-snapshot" class="refresh-snapshot loading-block">
+                  <span class="skeleton skeleton-line"></span>
+                  <span class="skeleton skeleton-line short"></span>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="view-panel" id="inventory-view" data-panel="inventory" hidden>
+            <div class="section-heading">
+              <div>
+                <p class="section-kicker">Normalized inventory</p>
+                <h2>Search across observations</h2>
+                <p>Use tables as the source of truth; open a row for provenance and linked evidence.</p>
+              </div>
+            </div>
+
+            <div class="segmented-control" role="tablist" aria-label="Inventory type">
+              <button type="button" role="tab" aria-selected="true" data-entity="documents">Documents</button>
+              <button type="button" role="tab" aria-selected="false" data-entity="components">Components</button>
+              <button type="button" role="tab" aria-selected="false" data-entity="artifacts">Artifacts</button>
+              <button type="button" role="tab" aria-selected="false" data-entity="evidence">Evidence</button>
+            </div>
+
+            <article class="card inventory-card">
+              <div class="table-toolbar">
+                <label class="field field-search">
+                  <span id="inventory-search-label">Filter source path</span>
+                  <span class="input-shell">
+                    <svg class="icon"><use href="#i-search"></use></svg>
+                    <input id="inventory-search" type="search" placeholder="Start typing…" />
+                  </span>
+                </label>
+                <label class="field" id="inventory-type-field">
+                  <span id="inventory-type-label">Format</span>
+                  <select id="inventory-type-filter">
+                    <option value="">All formats</option>
+                  </select>
+                </label>
+                <div class="result-meta" aria-live="polite">
+                  <span id="inventory-result-count">Loading…</span>
+                  <button class="button button-quiet" id="reset-inventory" type="button">Reset filters</button>
+                </div>
+              </div>
+
+              <div class="table-frame" id="inventory-table-frame">
+                <table id="inventory-table">
+                  <caption class="sr-only" id="inventory-caption">Catalog documents</caption>
+                  <thead id="inventory-head"></thead>
+                  <tbody id="inventory-body"></tbody>
+                </table>
+              </div>
+
+              <div class="empty-state" id="inventory-empty" hidden>
+                <svg class="icon icon-xl"><use href="#i-search"></use></svg>
+                <h3>No matching records</h3>
+                <p>Try a broader term, remove the type filter, or clear the active scope.</p>
+                <button class="button button-secondary" type="button" id="inventory-empty-reset">Clear filters</button>
+              </div>
+
+              <footer class="pagination">
+                <button class="button button-secondary" id="inventory-prev" type="button" disabled>Previous</button>
+                <span id="inventory-page">Rows 1–0</span>
+                <button class="button button-secondary" id="inventory-next" type="button" disabled>Next</button>
+              </footer>
+            </article>
+          </section>
+
+          <section class="view-panel" id="graph-view" data-panel="graph" hidden>
+            <div class="section-heading">
+              <div>
+                <p class="section-kicker">Document-local relationships</p>
+                <h2>Dependency explorer</h2>
+                <p>Trace producer-supplied edges in a single BOM. The synchronized edge table is the accessible source of truth.</p>
+              </div>
+            </div>
+
+            <aside class="coverage-note" role="note">
+              <svg class="icon"><use href="#i-alert"></use></svg>
+              <div>
+                <strong>Coverage is explicit, not inferred.</strong>
+                <p>Only documents with supplied dependency data appear here. Missing data means “not supplied,” not “no dependencies.”</p>
+              </div>
+            </aside>
+
+            <article class="card graph-controls-card">
+              <div class="graph-controls">
+                <label class="field field-grow">
+                  <span>Document</span>
+                  <select id="graph-document">
+                    <option value="">Loading dependency-bearing documents…</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Relationship</span>
+                  <select id="graph-relationship">
+                    <option value="DEPENDS_ON">DEPENDS_ON</option>
+                  </select>
+                </label>
+                <label class="field field-small">
+                  <span>Node cap</span>
+                  <select id="graph-node-limit">
+                    <option value="40">40</option>
+                    <option value="80" selected>80</option>
+                    <option value="120">120</option>
+                  </select>
+                </label>
+                <button class="button button-primary" id="load-graph" type="button">Render graph</button>
+              </div>
+            </article>
+
+            <div class="graph-stat-row" id="graph-stats" aria-live="polite">
+              <span><strong>—</strong> nodes shown</span>
+              <span><strong>—</strong> edges shown</span>
+              <span><strong>—</strong> relationship</span>
+            </div>
+
+            <div class="graph-layout">
+              <article class="card graph-card">
+                <header class="card-header">
+                  <div>
+                    <p class="card-kicker">Topology</p>
+                    <h3 id="graph-title">Select a document to begin</h3>
+                  </div>
+                  <div class="graph-key" aria-label="Graph legend">
+                    <span><i class="key-subject"></i> Subject</span>
+                    <span><i class="key-component"></i> Component</span>
+                    <span><i class="key-external"></i> Unresolved / external</span>
+                  </div>
+                </header>
+                <div class="graph-canvas-wrap" id="graph-canvas-wrap">
+                  <svg
+                    id="dependency-graph"
+                    class="dependency-graph"
+                    viewBox="0 0 960 520"
+                    role="img"
+                    aria-labelledby="graph-title graph-description"
+                  ></svg>
+                  <p class="sr-only" id="graph-description">No dependency graph is loaded.</p>
+                  <div class="graph-empty" id="graph-empty">
+                    <svg class="icon icon-xl"><use href="#i-graph"></use></svg>
+                    <strong>No graph loaded</strong>
+                    <span>Choose a document with dependency data and render it.</span>
+                  </div>
+                </div>
+              </article>
+
+              <aside class="card node-inspector" aria-labelledby="node-inspector-title">
+                <header class="card-header">
+                  <div>
+                    <p class="card-kicker">Selected node</p>
+                    <h3 id="node-inspector-title">Nothing selected</h3>
+                  </div>
+                </header>
+                <div id="node-inspector-body" class="inspector-empty">
+                  Select a node in the graph or an edge in the table to inspect its identity.
+                </div>
+                <div class="node-navigation">
+                  <button class="button button-secondary" id="node-prev" type="button" disabled>Previous node</button>
+                  <button class="button button-secondary" id="node-next" type="button" disabled>Next node</button>
+                </div>
+              </aside>
+            </div>
+
+            <article class="card graph-table-card">
+              <header class="card-header">
+                <div>
+                  <p class="card-kicker">Accessible relationship view</p>
+                  <h3>Edges in this rendering</h3>
+                </div>
+                <span class="quiet-label" id="edge-filter-label">All edges</span>
+              </header>
+              <div class="table-frame">
+                <table>
+                  <caption class="sr-only">Dependency edges for the selected document</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Source</th>
+                      <th scope="col">Relationship</th>
+                      <th scope="col">Target</th>
+                      <th scope="col">Resolution</th>
+                    </tr>
+                  </thead>
+                  <tbody id="edge-table-body"></tbody>
+                </table>
+              </div>
+            </article>
+          </section>
+
+          <section class="view-panel" id="integrity-view" data-panel="integrity" hidden>
+            <div class="section-heading">
+              <div>
+                <p class="section-kicker">Refresh control plane</p>
+                <h2>Fingerprint and quality audit</h2>
+                <p>Inspect current SHA-256 values, immutable checksum history, refresh outcomes, and parser findings.</p>
+              </div>
+            </div>
+
+            <div class="integrity-summary" id="integrity-summary">
+              <div><span>Fingerprint coverage</span><strong id="integrity-coverage">—</strong></div>
+              <div><span>Checksum versions</span><strong id="integrity-versions">—</strong></div>
+              <div><span>Latest unchanged</span><strong id="integrity-unchanged">—</strong></div>
+              <div><span>Latest failed</span><strong id="integrity-failed">—</strong></div>
+            </div>
+
+            <div class="segmented-control" role="tablist" aria-label="Integrity data type">
+              <button type="button" role="tab" aria-selected="true" data-integrity="fingerprints">Fingerprints</button>
+              <button type="button" role="tab" aria-selected="false" data-integrity="runs">Refresh runs</button>
+              <button type="button" role="tab" aria-selected="false" data-integrity="issues">Quality issues</button>
+            </div>
+
+            <article class="card inventory-card">
+              <div class="table-toolbar">
+                <label class="field field-search">
+                  <span id="integrity-search-label">Filter source path</span>
+                  <span class="input-shell">
+                    <svg class="icon"><use href="#i-search"></use></svg>
+                    <input id="integrity-search" type="search" placeholder="Search current view…" />
+                  </span>
+                </label>
+                <div class="result-meta" aria-live="polite">
+                  <span id="integrity-result-count">Loading…</span>
+                </div>
+              </div>
+              <div class="table-frame">
+                <table id="integrity-table">
+                  <caption class="sr-only" id="integrity-caption">Source fingerprints</caption>
+                  <thead id="integrity-head"></thead>
+                  <tbody id="integrity-body"></tbody>
+                </table>
+              </div>
+              <div class="empty-state" id="integrity-empty" hidden>
+                <svg class="icon icon-xl"><use href="#i-shield"></use></svg>
+                <h3>No records in this view</h3>
+                <p>Try another integrity tab or clear the current search.</p>
+              </div>
+            </article>
+          </section>
+
+          <section class="view-panel" id="fips-view" data-panel="fips" hidden>
+            <div class="section-heading">
+              <div>
+                <p class="section-kicker">FedRAMP assessment workspace</p>
+                <h2>FIPS 140-3 migration assessment</h2>
+                <p>Evidence-backed candidate gaps and deduplicated draft POA&amp;M rows for the active scope.</p>
+              </div>
+              <button class="button button-secondary" id="reload-fips" type="button">
+                <svg class="icon"><use href="#i-refresh"></use></svg>
+                Refresh assessment
+              </button>
+            </div>
+
+            <aside class="deadline-banner" role="note" aria-label="FIPS 140 transition deadline">
+              <svg class="icon"><use href="#i-alert"></use></svg>
+              <div>
+                <p class="section-kicker">Transition gate</p>
+                <strong>FIPS 140-2 is historical for new-system use after 21 Sep 2026.</strong>
+                <p id="fips-deadline-copy">Loading assessment policy…</p>
+              </div>
+              <span class="deadline-count" id="fips-deadline-count">—</span>
+            </aside>
+
+            <aside class="coverage-note" role="note">
+              <svg class="icon"><use href="#i-shield"></use></svg>
+              <div>
+                <strong>Draft decision support — review required.</strong>
+                <p id="fips-disclaimer">A catalog signal is not proof of CMVP validation, approved-mode operation, or FedRAMP compliance.</p>
+              </div>
+            </aside>
+
+            <div class="metric-grid fips-metric-grid" aria-label="FIPS assessment summary">
+              <article class="metric-card has-error">
+                <div class="metric-icon"><svg class="icon"><use href="#i-alert"></use></svg></div>
+                <p>Draft POA&amp;M candidates</p>
+                <strong id="fips-poam-count">—</strong>
+                <span>Deduplicated candidate items</span>
+              </article>
+              <article class="metric-card">
+                <div class="metric-icon"><svg class="icon"><use href="#i-shield"></use></svg></div>
+                <p>Needs evidence review</p>
+                <strong id="fips-review-count">—</strong>
+                <span>Not exported as POA&amp;M</span>
+              </article>
+              <article class="metric-card">
+                <div class="metric-icon"><svg class="icon"><use href="#i-grid"></use></svg></div>
+                <p>Affected service groups</p>
+                <strong id="fips-service-count">—</strong>
+                <span>Across candidate and review findings</span>
+              </article>
+              <article class="metric-card">
+                <div class="metric-icon"><svg class="icon"><use href="#i-file"></use></svg></div>
+                <p>Evidence coverage</p>
+                <strong id="fips-coverage-count">—</strong>
+                <span id="fips-coverage-caption">FIPS-related catalog evidence</span>
+              </article>
+            </div>
+
+            <div class="segmented-control" role="tablist" aria-label="FIPS assessment view">
+              <button type="button" role="tab" aria-selected="true" data-fips-tab="assessment">Assessment</button>
+              <button type="button" role="tab" aria-selected="false" data-fips-tab="poam">POA&amp;M candidates</button>
+            </div>
+
+            <div id="fips-assessment-panel" role="tabpanel">
+              <div class="dashboard-grid fips-layout">
+                <article class="card card-wide">
+                  <header class="card-header">
+                    <div>
+                      <p class="card-kicker">Coverage by service group</p>
+                      <h3>Prioritize evidence collection</h3>
+                    </div>
+                    <span class="quiet-label">Candidate gaps / review</span>
+                  </header>
+                  <div class="table-frame table-frame-compact">
+                    <table>
+                      <caption class="sr-only">FIPS assessment rollup by service group</caption>
+                      <thead><tr><th scope="col">Service group</th><th scope="col">Documents</th><th scope="col">Evidence coverage</th><th scope="col">Candidate findings</th><th scope="col">Review</th></tr></thead>
+                      <tbody id="fips-service-body"></tbody>
+                    </table>
+                  </div>
+                </article>
+                <article class="card">
+                  <header class="card-header">
+                    <div>
+                      <p class="card-kicker">Assessment boundary</p>
+                      <h3>What this view does</h3>
+                    </div>
+                  </header>
+                  <div class="assessment-boundary" id="fips-boundary"></div>
+                </article>
+              </div>
+
+              <article class="card inventory-card fips-findings-card">
+                <header class="card-header">
+                  <div>
+                    <p class="card-kicker">Candidate findings</p>
+                    <h3>Traceable evidence, not compliance conclusions</h3>
+                  </div>
+                  <span class="quiet-label" id="fips-findings-count">Loading…</span>
+                </header>
+                <div class="table-toolbar fips-table-toolbar">
+                  <label class="field field-search">
+                    <span>Filter findings</span>
+                    <span class="input-shell">
+                      <svg class="icon"><use href="#i-search"></use></svg>
+                      <input id="fips-search" type="search" placeholder="ID, subject, rule, or service…" />
+                    </span>
+                  </label>
+                  <label class="field field-small">
+                    <span>Assessment state</span>
+                    <select id="fips-state-filter">
+                      <option value="all">All findings</option>
+                      <option value="candidate">POA&amp;M candidate findings</option>
+                      <option value="review">Evidence review only</option>
+                      <option value="FIPS1403-001">Legacy FIPS 140-2</option>
+                      <option value="FIPS1403-002">Explicit 140-3 negative</option>
+                      <option value="FIPS1403-004">Conflicting evidence</option>
+                      <option value="FIPS1403-005">Inconclusive runtime probe</option>
+                      <option value="FIPS1403-006">Incomplete evidence</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="table-frame">
+                  <table class="fips-table">
+                    <caption class="sr-only">FIPS 140-3 assessment candidate findings</caption>
+                    <thead><tr><th scope="col">Finding</th><th scope="col">Subject</th><th scope="col">Assessment state</th><th scope="col">Affected groups</th><th scope="col">Evidence</th><th scope="col">Proposed risk</th></tr></thead>
+                    <tbody id="fips-findings-body"></tbody>
+                  </table>
+                </div>
+              </article>
+            </div>
+
+            <div id="fips-poam-panel" role="tabpanel" hidden>
+              <article class="card inventory-card fips-findings-card">
+                <header class="card-header fips-poam-header">
+                  <div>
+                    <p class="card-kicker">Deduplicated POA&amp;M candidate export</p>
+                    <h3>Draft rows for assessor and CSP review</h3>
+                    <p>Confirm ATO boundary, deployed module/certificate match, ownership, dates, and risk before entering the authoritative POA&amp;M.</p>
+                  </div>
+                  <a class="button button-primary" id="fips-export" href="#" download>
+                    <svg class="icon"><use href="#i-file"></use></svg>
+                    Download CSV
+                  </a>
+                </header>
+                <div class="table-frame">
+                  <table class="fips-table">
+                    <caption class="sr-only">Deduplicated FIPS 140-3 POA&amp;M candidates</caption>
+                    <thead><tr><th scope="col">Draft candidate</th><th scope="col">Weakness</th><th scope="col">Affected groups</th><th scope="col">Evidence sources</th><th scope="col">Risk / review</th></tr></thead>
+                    <tbody id="fips-poam-body"></tbody>
+                  </table>
+                </div>
+              </article>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <dialog class="detail-drawer" id="detail-dialog" aria-labelledby="detail-title">
+      <div class="drawer-shell">
+        <header class="drawer-header">
+          <div>
+            <p class="section-kicker" id="detail-kicker">Record detail</p>
+            <h2 id="detail-title">Loading…</h2>
+          </div>
+          <button class="icon-button" id="close-detail" type="button" aria-label="Close record detail">
+            <svg class="icon"><use href="#i-close"></use></svg>
+          </button>
+        </header>
+        <div class="drawer-body" id="detail-body"></div>
+      </div>
+    </dialog>
+
+    <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+    <noscript>
+      <div class="noscript-message">CBOM Workbench needs JavaScript to query and explore the catalog API.</div>
+    </noscript>
+  </body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/fedramp-fips-assessor/assessment-run.schema.json",
+  "title": "FedRAMP FIPS assessment run",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "assessment_run_id", "executed_at", "assessment_as_of", "assessor_identity", "status", "scope", "rules_version", "authority_register", "catalog_evidence", "assumptions", "limitations"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "assessment_run_id": {"type": "string", "minLength": 1},
+    "executed_at": {"type": "string", "format": "date-time"},
+    "assessment_as_of": {"type": "string", "format": "date-time"},
+    "assessor_identity": {"type": "string", "minLength": 1},
+    "status": {"const": "candidate"},
+    "scope": {"type": "object", "additionalProperties": false, "required": ["ato_boundary", "source_collection", "service_groups"], "properties": {"ato_boundary": {"type": "string", "minLength": 1}, "source_collection": {"type": "string", "minLength": 1}, "service_groups": {"type": "array", "items": {"type": "string"}, "minItems": 1}}},
+    "rules_version": {"type": "string", "minLength": 1},
+    "authority_register": {"type": "object", "additionalProperties": false, "required": ["path", "sha256", "retrieved_at"], "properties": {"path": {"type": "string", "minLength": 1}, "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "retrieved_at": {"type": "string", "format": "date"}}},
+    "catalog_evidence": {"type": "object", "additionalProperties": false, "required": ["source_fingerprints", "document_ids", "external_record_ids"], "properties": {"source_fingerprints": {"type": "array", "items": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}, "document_ids": {"type": "array", "items": {"type": "integer", "minimum": 1}}, "external_record_ids": {"type": "array", "items": {"type": "integer", "minimum": 1}}}},
+    "assumptions": {"type": "array", "items": {"type": "string"}},
+    "limitations": {"type": "array", "items": {"type": "string"}, "minItems": 1}
+  }
+}

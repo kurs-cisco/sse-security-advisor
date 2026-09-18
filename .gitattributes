@@ -1,0 +1,3 @@
+# The Confluence-exported tracker is an opaque Office/MIME document; preserve
+# its embedded HTML, quoted-printable, and base64 payload without text diffs.
+*.doc -diff

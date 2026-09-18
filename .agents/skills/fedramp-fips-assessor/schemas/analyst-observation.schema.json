@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/fedramp-fips-assessor/analyst-observation.schema.json",
+  "title": "FedRAMP FIPS analyst observation not eligible for POA&M",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "observation_id", "output_type", "assertion_state", "poam_eligibility", "title", "technical_observation", "scope", "evidence", "missing_required_facts", "limitations", "assessment_run_id", "created_at", "review"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "observation_id": {"type": "string", "pattern": "^OBS-FIPS3-[A-Z0-9-]+$"},
+    "output_type": {"const": "analyst_observation"},
+    "assertion_state": {"enum": ["not_assessable", "evidence_gap"]},
+    "poam_eligibility": {"const": false},
+    "title": {"type": "string", "minLength": 1},
+    "technical_observation": {"type": "string", "minLength": 1},
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_collection", "service_groups", "ato_boundary"],
+      "properties": {
+        "source_collection": {"type": "string", "minLength": 1},
+        "service_groups": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "ato_boundary": {"type": ["string", "null"]}
+      }
+    },
+    "evidence": {"type": "array", "items": {"$ref": "evidence-reference.schema.json"}, "minItems": 1},
+    "missing_required_facts": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+    "conflict_summary": {"type": ["string", "null"]},
+    "limitations": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+    "assessment_run_id": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "format": "date-time"},
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requires_authorized_assessor_review", "requires_ao_review", "requires_system_owner_attestation"],
+      "properties": {
+        "requires_authorized_assessor_review": {"const": true},
+        "requires_ao_review": {"const": true},
+        "requires_system_owner_attestation": {"const": true}
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+.env
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+inventory.json
+snapshots/*.dump
+snapshots/*.dump.sha256
+snapshots/*.dump.manifest.json

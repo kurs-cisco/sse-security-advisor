@@ -1,0 +1,4 @@
+interface:
+  display_name: "FedRAMP FIPS Assessor"
+  short_description: "Evidence-backed FIPS 140-3 gap and POA&M candidate assessment"
+  default_prompt: "Assess the selected CBOM catalog scope for FIPS 140-3 transition evidence gaps and create deduplicated POA&M candidates with traceable evidence."

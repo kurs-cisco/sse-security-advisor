@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/fedramp-fips-assessor/poam-item.schema.json",
+  "title": "FedRAMP FIPS POA&M candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "poam_candidate_id", "dedupe_key", "status", "assertion_state", "finding_type", "title", "technical_condition", "risk_rationale", "control_mapping", "scope", "affected_services", "root_cause", "remediation", "evidence", "evidence_gaps", "limitations", "review", "assessment_run_id", "created_at"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "poam_candidate_id": {"type": "string", "pattern": "^FIPS3-[A-Z0-9-]+$"},
+    "dedupe_key": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "status": {"const": "candidate"},
+    "assertion_state": {"enum": ["confirmed_gap", "likely_gap", "validated_pending_review", "out_of_scope_candidate"]},
+    "finding_type": {"enum": ["missing_cmvp_evidence", "runtime_fips_not_enabled", "legacy_module_transition", "configuration_uncertain", "crypto_boundary_unresolved", "other"]},
+    "title": {"type": "string", "minLength": 1},
+    "executive_summary": {"type": "string"},
+    "technical_condition": {"type": "string", "minLength": 1},
+    "risk_rationale": {"type": "string", "minLength": 1},
+    "control_mapping": {"type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["control_id", "mapping_basis", "confidence"], "properties": {"control_id": {"type": "string", "minLength": 1}, "mapping_basis": {"enum": ["organization-provided", "assessment-plan", "analyst-proposed"]}, "confidence": {"enum": ["high", "medium", "low"]}}}},
+    "scope": {"type": "object", "additionalProperties": false, "required": ["ato_boundary", "source_collection", "service_groups", "artifacts"], "properties": {"ato_boundary": {"type": "string", "minLength": 1}, "source_collection": {"type": "string", "minLength": 1}, "service_groups": {"type": "array", "items": {"type": "string"}, "minItems": 1}, "artifacts": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["canonical_key", "name", "digest", "deployment_linkage"], "properties": {"canonical_key": {"type": "string"}, "name": {"type": "string"}, "digest": {"type": ["string", "null"]}, "deployment_linkage": {"enum": ["confirmed", "probable", "unresolved"]}}}}}},
+    "affected_services": {"type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["source_collection", "service_group", "source_path", "artifact_key", "impact_status"], "properties": {"source_collection": {"type": "string"}, "service_group": {"type": "string"}, "source_path": {"type": "string"}, "artifact_key": {"type": ["string", "null"]}, "impact_status": {"enum": ["confirmed", "probable", "unresolved"]}}}},
+    "root_cause": {"type": "string", "minLength": 1},
+    "remediation": {"type": "object", "additionalProperties": false, "required": ["recommended_action", "validation_criteria", "milestones", "owner"], "properties": {"recommended_action": {"type": "string", "minLength": 1}, "validation_criteria": {"type": "array", "items": {"type": "string"}, "minItems": 1}, "milestones": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["name", "target_date"], "properties": {"name": {"type": "string"}, "target_date": {"type": ["string", "null"], "format": "date"}}}}, "owner": {"type": "string", "minLength": 1}}},
+    "evidence": {"type": "array", "minItems": 1, "items": {"$ref": "evidence-reference.schema.json"}},
+    "evidence_gaps": {"type": "array", "items": {"type": "string"}},
+    "limitations": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    "review": {"type": "object", "additionalProperties": false, "required": ["requires_authorized_assessor_review", "requires_ao_review", "requires_system_owner_attestation"], "properties": {"requires_authorized_assessor_review": {"const": true}, "requires_ao_review": {"const": true}, "requires_system_owner_attestation": {"const": true}}},
+    "assessment_run_id": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "format": "date-time"}
+  }
+}
