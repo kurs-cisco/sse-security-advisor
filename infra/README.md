@@ -64,7 +64,8 @@ For the reviewed September 22 release, `deploy-latest.sh` verifies the four
 source/evidence SHA-256 values, including the service-impact spreadsheet,
 uploads them only to the private encrypted CBOM bucket, builds and pushes a new
 immutable amd64 image pair, synthesizes and diffs the CDK stack, deploys the ECS
-change, applies migrations through 013, runs the checksum-gated imports, and
+change through CDK so generated assets are published, applies migrations through
+014, runs the checksum-gated imports, and
 waits for ECS stability. Migration 014 adds private asynchronous-ingestion job
 metadata without putting raw corpus data in PostgreSQL. Run it from an
 authenticated shell only after approving
