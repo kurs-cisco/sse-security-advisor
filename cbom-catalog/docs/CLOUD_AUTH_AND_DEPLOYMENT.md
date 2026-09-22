@@ -1,7 +1,7 @@
 # Cloud authentication and AWS deployment assessment
 
-This document records the read-only AWS assessment performed on 2026-09-18 and
-the deployment boundary for CBOM Workbench. It intentionally contains no OIDC
+This document records the AWS assessment performed on 2026-09-18 and the staged
+ECS deployment performed on 2026-09-22. It intentionally contains no OIDC
 client secret, database password, bearer token, or source inventory payload.
 
 ## Authentication modes
@@ -35,8 +35,8 @@ CBOM_ALB_ARN=<the dedicated CBOM ALB ARN>
 CBOM_OIDC_CLIENT_ID=<client ID from OIDC.md>
 ```
 
-Store the OIDC client secret under the deployment-defined
-`AUTH_KEYCLOAK_SECRET` key in AWS Secrets Manager. Never place it in an image,
+Store the rotated OIDC client secret in AWS Secrets Manager at
+`/cbom-workbench/dev/oidc-client-secret`. Never place it in an image,
 Kubernetes manifest, shell history, `.env` file committed to source, or load
 balancer annotation. Rotate the previously documented secret before cloud use,
 as required by `OIDC.md`.
@@ -50,37 +50,35 @@ cookie such as `CBOMAWSELBAuthSessionCookie` and a suitably short dev session.
 ## Read-only AWS inventory assessment
 
 The default CLI identity could read account `135124134289` in GovCloud region
-`us-gov-east-1`. No AWS resources were created, changed, or deleted.
+`us-gov-east-1`. The table below preserves the pre-deployment observations that
+informed the isolated ECS design; it is not a statement of current stack state.
 
 | Existing asset | Observation | Reuse decision |
 | --- | --- | --- |
 | Route 53 zone `swg.dev-umbrellagov.com` | Existing public hosted zone contains the NOTA alias. | Reuse the zone; create a distinct `cbom.swg.dev-umbrellagov.com` alias. Do not change the NOTA record. |
-| NOTA ALB `k8s-nota-017e777ef9` | Active, internet-facing, owned by AWS Load Balancer Controller for EKS cluster `swg-dev-1a`; its HTTPS rule forwards directly and currently has no OIDC action. | Do not manually edit or share the controller-owned NOTA rule. Create a dedicated CBOM Ingress/ALB so reconciliation and outages remain isolated. |
+| NOTA ALB `k8s-nota-017e777ef9` | Active, internet-facing, owned by AWS Load Balancer Controller for EKS cluster `swg-dev-1a`; its HTTPS rule forwards directly and currently has no OIDC action. | Do not manually edit or share the controller-owned NOTA rule. A dedicated CBOM ALB was created so reconciliation and outages remain isolated. |
 | NOTA ACM certificate | Covers exactly `nota.swg.dev-umbrellagov.com`, not a wildcard. | Cannot secure the proposed CBOM hostname. Request a new ACM certificate validated through the reusable hosted zone. |
-| EKS cluster `swg-dev-1a` | Active Kubernetes 1.34, private API endpoint, all control-plane log types enabled, in VPC `vpc-0ea02619196158906`. | Reusable with a dedicated namespace, service accounts, network policies, secrets, and Ingress. Deployment automation must run from a network that can reach the private endpoint. |
-| EKS VPC/subnets | Three private data-plane subnets are already associated with the cluster. | Reuse after capacity, route, NAT, and security-group review. A new ALB may use the tagged public ingress subnets. |
-| NOTA ECR repositories | Separate AES-256 repositories with scan-on-push. | Reuse the registry/account pattern, not the repositories. Create isolated `cbom-workbench/web`, `cbom-workbench/api`, and optionally `cbom-workbench/ingest` repositories. |
+| EKS cluster `swg-dev-1a` | Active Kubernetes 1.34, private API endpoint, all control-plane log types enabled, in VPC `vpc-0ea02619196158906`. | Not reused. The approved design uses ECS Fargate and leaves the NOTA cluster untouched. |
+| VPC/subnets | Public ingress and private NAT subnets exist in the selected VPC. | Reused for a dedicated CBOM ALB and private ECS/RDS placement after route and security-group review. |
+| NOTA ECR repositories | Separate AES-256 repositories with scan-on-push. | Reuse the registry/account pattern, not the repositories. Isolated `cbom-workbench/web` and `cbom-workbench/catalog` repositories were created. |
 | Existing PostgreSQL RDS | PostgreSQL 14.19 instance belongs to TAAC and is in VPC `vpc-08b420570f2cb5276`, not the NOTA/EKS VPC. Local CBOM uses PostgreSQL 16. | Do not reuse. Provision a private, encrypted PostgreSQL 16 database in the workload VPC with its own subnet group, security group, credentials, backups, and ownership boundary. |
 
-Recommended cloud-dev layout:
+Deployed cloud-dev layout:
 
 ```text
-Route 53 cbom alias -> dedicated HTTPS ALB + OIDC -> Next.js web
-                                                    -> private FastAPI service
+Route 53 cbom alias -> dedicated HTTPS ALB + OIDC -> ECS Fargate task
+                                                    |- Next.js web
+                                                    |- FastAPI on loopback
                                                     -> private PostgreSQL 16 RDS
 ```
 
-Only the web service receives traffic from the ALB. Restrict web ingress to the
-ALB security group, API ingress to the web workload, and database ingress to the
-API/ingest workloads. This restriction is required even though the application
-verifies the ALB signature. Enable ALB access logs, WAF as required by the
-system boundary, container logs, RDS encryption/backups, and CloudWatch alarms.
-
-If EKS Ingress is used, the AWS Load Balancer Controller expects the OIDC client
-ID and client secret in a Kubernetes Secret in the same namespace. Populate that
-Secret from AWS Secrets Manager using the approved secrets integration; do not
-commit the Secret. A separate ALB managed outside the controller may instead use
-a Secrets Manager dynamic reference in CloudFormation.
+Only the Next.js container receives traffic from the ALB. FastAPI listens only
+inside the same task and uses a generated bearer token shared through Secrets
+Manager. RDS permits PostgreSQL only from the task and restore-job security
+groups. The deployment uses ECS Fargate rather than EKS and does not modify the
+NOTA cluster, controller-owned ALB, certificate, database, or DNS record. WAF is
+not part of this approved dev deployment; add it only if the system boundary or
+organizational policy requires it.
 
 ## Database snapshot and restore
 
@@ -112,10 +110,28 @@ component, service-group, finding, and POA&M counts with the local source before
 changing DNS. Keep the old database untouched until acceptance completes.
 The full procedure is in [DATABASE_SNAPSHOTS.md](DATABASE_SNAPSHOTS.md).
 
-## Deployment gate
+## Current deployment status
 
-Actual deployment is intentionally not performed by this assessment. Creating
-the hostname, ACM certificate, ALB, ECR repositories, secrets, RDS instance,
-Kubernetes resources, or restoring data changes externally shared and billable
-infrastructure. Apply those changes only after approving the hostname and the
-recommended dedicated-ALB/dedicated-database topology.
+The `cbom-workbench-dev` CloudFormation stack is deployed in account
+`135124134289`, region `us-gov-east-1`, with termination protection enabled.
+The ECS service is active at desired/running count 1 on an immutable
+`deploy-20260922-3` image tag. The target is healthy, `/healthz` returns 200,
+and unauthenticated application requests redirect to the configured OIDC
+provider.
+
+The encrypted snapshot was restored after SHA-256 verification. The canonical
+manifest/API metrics are 39 service groups, 534 present source files, 533
+unique present documents, 341 artifacts, 59,263 unique components, 282,688
+component occurrences, and 609 fingerprint records. Raw `COPY` counts printed
+by `pg_restore` are table-row counts and must not be compared directly with
+these deduplicated API metrics.
+
+The application hostname is `https://cbom.swg.dev-umbrellagov.com/`. The IdP
+callback is:
+
+```text
+https://cbom.swg.dev-umbrellagov.com/oauth2/idpresponse
+```
+
+The cloud API remains private behind the Next.js proxy and bearer-token
+boundary. Do not disable OIDC or expose the API listener publicly.

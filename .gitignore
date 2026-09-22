@@ -33,6 +33,8 @@ dist/
 node_modules/
 .next/
 out/
+cdk.out/
+.cdk.staging/
 *.tsbuildinfo
 npm-debug.log*
 yarn-debug.log*

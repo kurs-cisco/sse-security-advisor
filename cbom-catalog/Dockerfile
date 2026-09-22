@@ -6,6 +6,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN groupadd --system cbom && useradd --system --gid cbom --create-home cbom
 
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y postgresql-client ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY db ./db

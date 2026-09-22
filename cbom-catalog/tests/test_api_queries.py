@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import io
 import json
+import threading
 import unittest
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -17,6 +19,31 @@ except ModuleNotFoundError as exc:
 
 @unittest.skipIf(api is None, "install project dependencies to run API query tests")
 class ApiQueryTests(unittest.TestCase):
+    def test_distinct_cold_cache_builders_do_not_block_each_other(self) -> None:
+        barrier = threading.Barrier(2)
+
+        def build(value: str) -> str:
+            barrier.wait(timeout=2)
+            return value
+
+        with api._cache_lock:
+            api._data_cache.clear()
+            api._cache_revision = None
+
+        with (
+            patch.object(api, "_catalog_revision", return_value=17),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            first = executor.submit(
+                api._cached_catalog_value, "dashboard", (), lambda: build("dashboard")
+            )
+            second = executor.submit(
+                api._cached_catalog_value, "assessment", (), lambda: build("assessment")
+            )
+
+        self.assertEqual(first.result(), ("dashboard", 17, False))
+        self.assertEqual(second.result(), ("assessment", 17, False))
+
     def test_invalid_numeric_environment_values_fall_back_safely(self) -> None:
         request = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"), headers={})
         with patch.dict(

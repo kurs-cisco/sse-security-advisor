@@ -220,6 +220,30 @@ def shutdown_database_pool() -> None:
     close_pool()
 
 
+@app.on_event("startup")
+def prewarm_catalog_caches() -> None:
+    """Build the expensive unscoped views before the first interactive request."""
+    if not _env_bool("CBOM_API_PREWARM"):
+        return
+    started = time.perf_counter()
+    try:
+        _cached_catalog_value(
+            "dashboard-overview",
+            (None, None),
+            lambda: _build_dashboard_overview(None, None),
+        )
+        _cached_fips_assessment(None, None)
+    except Exception:
+        # A transient database problem must not keep health checks from starting;
+        # the normal request path can retry and will expose the actual error.
+        LOGGER.exception("catalog cache prewarm failed")
+    else:
+        LOGGER.info(
+            "catalog cache prewarm completed elapsed_ms=%.1f",
+            (time.perf_counter() - started) * 1_000,
+        )
+
+
 def _database_url() -> str | None:
     return os.environ.get("DATABASE_URL")
 
@@ -288,10 +312,26 @@ def _cached_catalog_value(
             value = _data_cache.pop(key)
             _data_cache[key] = value
             return value, revision, True
-        value = builder()
-        _data_cache[key] = value
-        while len(_data_cache) > 32:
-            _data_cache.popitem(last=False)
+
+    # Aggregates can take several seconds on a cold catalog. Never hold the
+    # global LRU lock while querying: unrelated dashboard, inventory, and FIPS
+    # requests should be able to build concurrently.
+    value = builder()
+
+    with _cache_lock:
+        # Another request may have completed the same key while this one was
+        # building. Prefer its canonical cached object and report a cache hit.
+        if key in _data_cache:
+            cached = _data_cache.pop(key)
+            _data_cache[key] = cached
+            return cached, revision, True
+        # An import may have advanced the catalog while the builder ran. Return
+        # the internally consistent result for its revision, but do not retain
+        # it in the new revision's cache.
+        if _cache_revision == revision:
+            _data_cache[key] = value
+            while len(_data_cache) > 32:
+                _data_cache.popitem(last=False)
         return value, revision, False
 
 

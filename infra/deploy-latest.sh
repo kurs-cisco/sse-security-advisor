@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REGION="us-gov-east-1"
+ACCOUNT_ID="135124134289"
+STACK_NAME="cbom-workbench-dev"
+CLUSTER_NAME="cbom-workbench-dev"
+SERVICE_NAME="cbom-workbench-web"
+BUCKET="cbom-workbench-data-135124134289-us-gov-east-1"
+RELEASE_PREFIX="transfer/releases/2026-09-21"
+JOB_TASK="cbom-workbench-job:3"
+JOB_SECURITY_GROUP="sg-0da5ac19f21682b69"
+PRIVATE_SUBNETS="subnet-0a79a031b7da0ee66,subnet-0f1689d4dc8f2ad5d,subnet-06bec111d36991f2a"
+
+TARGET_FILE="${REPO_ROOT}/FIPS-140-3-21-sept.json"
+PUBLIC_EVIDENCE_FILE="${REPO_ROOT}/cbom-catalog/evidence/fips-module-public-evidence-2026-09-21.json"
+CATALOG_EVIDENCE_FILE="${REPO_ROOT}/cbom-catalog/evidence/current-version-correlation-2026-09-21.json"
+
+for command in aws jq npx npm shasum; do
+  command -v "${command}" >/dev/null 2>&1 || {
+    echo "Required command is missing: ${command}" >&2
+    exit 1
+  }
+done
+
+actual_account="$(aws sts get-caller-identity --query Account --output text)"
+if [[ "${actual_account}" != "${ACCOUNT_ID}" ]]; then
+  echo "Refusing deployment: expected AWS account ${ACCOUNT_ID}, got ${actual_account}" >&2
+  exit 1
+fi
+
+verify_sha256() {
+  local expected="$1"
+  local path="$2"
+  local actual
+  actual="$(shasum -a 256 "${path}" | awk '{print $1}')"
+  if [[ "${actual}" != "${expected}" ]]; then
+    echo "Checksum mismatch for ${path}: expected ${expected}, got ${actual}" >&2
+    exit 1
+  fi
+}
+
+verify_sha256 "a4da7a0959c052932c8f282476a10eab26aa68e45cbcd4b841ba7b68c2d72004" "${TARGET_FILE}"
+verify_sha256 "585ff2e7e8ca2e2e1e9b0d1bbb4482c2e709013f37a655a884b2972e7026f26a" "${PUBLIC_EVIDENCE_FILE}"
+verify_sha256 "3dcd93ccf1274e2444e1d6b4ced7231d9c7fd34625fac4bf7260311d6c1c01e9" "${CATALOG_EVIDENCE_FILE}"
+
+aws s3 cp "${TARGET_FILE}" "s3://${BUCKET}/${RELEASE_PREFIX}/FIPS-140-3-21-sept.json" \
+  --region "${REGION}" --sse aws:kms --content-type application/json
+aws s3 cp "${PUBLIC_EVIDENCE_FILE}" "s3://${BUCKET}/${RELEASE_PREFIX}/fips-module-public-evidence-2026-09-21.json" \
+  --region "${REGION}" --sse aws:kms --content-type application/json
+aws s3 cp "${CATALOG_EVIDENCE_FILE}" "s3://${BUCKET}/${RELEASE_PREFIX}/current-version-correlation-2026-09-21.json" \
+  --region "${REGION}" --sse aws:kms --content-type application/json
+
+read -r -d '' JOB_COMMAND <<'EOF' || true
+python -c 'import boto3,os; client=boto3.client("s3"); bucket=os.environ["CBOM_SNAPSHOT_BUCKET"]; files=[("transfer/releases/2026-09-21/FIPS-140-3-21-sept.json","/tmp/target-modules.json"),("transfer/releases/2026-09-21/fips-module-public-evidence-2026-09-21.json","/tmp/public-evidence.json"),("transfer/releases/2026-09-21/current-version-correlation-2026-09-21.json","/tmp/catalog-evidence.json")]; [client.download_file(bucket,key,path) for key,path in files]'
+cbom-catalog migrate --schema /app/db
+cbom-catalog import-target-modules /tmp/target-modules.json
+cbom-catalog import-target-evidence /tmp/public-evidence.json
+cbom-catalog import-catalog-claim-evidence /tmp/catalog-evidence.json
+EOF
+
+overrides="$(jq -cn --arg command "${JOB_COMMAND}" \
+  '{containerOverrides:[{name:"job",command:["sh","-ec",$command]}]}')"
+
+task_arn="$(aws ecs run-task \
+  --region "${REGION}" \
+  --cluster "${CLUSTER_NAME}" \
+  --launch-type FARGATE \
+  --platform-version LATEST \
+  --task-definition "${JOB_TASK}" \
+  --network-configuration "awsvpcConfiguration={subnets=[${PRIVATE_SUBNETS}],securityGroups=[${JOB_SECURITY_GROUP}],assignPublicIp=DISABLED}" \
+  --overrides "${overrides}" \
+  --query 'tasks[0].taskArn' \
+  --output text)"
+
+if [[ -z "${task_arn}" || "${task_arn}" == "None" ]]; then
+  echo "ECS did not return a migration/import task ARN" >&2
+  exit 1
+fi
+
+aws ecs wait tasks-stopped --region "${REGION}" --cluster "${CLUSTER_NAME}" --tasks "${task_arn}"
+task_exit="$(aws ecs describe-tasks --region "${REGION}" --cluster "${CLUSTER_NAME}" \
+  --tasks "${task_arn}" --query 'tasks[0].containers[0].exitCode' --output text)"
+task_id="${task_arn##*/}"
+aws logs get-log-events --region "${REGION}" --log-group-name /cbom-workbench/dev/jobs \
+  --log-stream-name "job/job/${task_id}" --query 'events[*].message' --output text || true
+if [[ "${task_exit}" != "0" ]]; then
+  echo "Migration/import task failed with exit code ${task_exit}" >&2
+  exit 1
+fi
+
+cd "${SCRIPT_DIR}"
+npm run build
+npx cdk synth --strict >/dev/null
+aws cloudformation deploy \
+  --region "${REGION}" \
+  --stack-name "${STACK_NAME}" \
+  --template-file cdk.out/CbomWorkbenchDev.template.json \
+  --s3-bucket cdk-hnb659fds-assets-135124134289-us-gov-east-1 \
+  --s3-prefix cbom-workbench-dev/templates \
+  --capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
+  --no-fail-on-empty-changeset \
+  --tags \
+    ApplicationName='CBOM Workbench' \
+    Environment=NONPROD \
+    EnvironmentSubcategory=DEV \
+    DataClassification='Cisco Restricted' \
+    IntendedPublic=False
+
+aws ecs wait services-stable --region "${REGION}" --cluster "${CLUSTER_NAME}" --services "${SERVICE_NAME}"
+aws cloudformation describe-stacks --region "${REGION}" --stack-name "${STACK_NAME}" \
+  --query 'Stacks[0].{Status:StackStatus,Outputs:Outputs[?OutputKey==`Hostname` || OutputKey==`ServicesActivated` || OutputKey==`OidcEnabled`]}' \
+  --output json
+aws ecs describe-services --region "${REGION}" --cluster "${CLUSTER_NAME}" --services "${SERVICE_NAME}" \
+  --query 'services[0].{desiredCount:desiredCount,runningCount:runningCount,pendingCount:pendingCount,rolloutState:deployments[0].rolloutState}' \
+  --output json

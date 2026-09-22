@@ -10,7 +10,10 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   const origin = (process.env.CBOM_API_ORIGIN ?? "http://127.0.0.1:8000").replace(/\/$/, "");
   const target = new URL(`/api/${path.map(encodeURIComponent).join("/")}${request.nextUrl.search}`, origin);
   const headers = new Headers();
-  for (const name of ["accept", "content-type", "if-none-match", "x-request-id"]) {
+  // This route is a JSON body proxy, not a browser cache. Do not forward
+  // If-None-Match: an upstream 304 has no body and the client cannot reconstruct
+  // the prior response across server instances or deployments.
+  for (const name of ["accept", "content-type", "x-request-id"]) {
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }

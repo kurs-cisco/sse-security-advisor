@@ -20,7 +20,11 @@ export async function fetchJson<T>(path: string, options: RequestOptions = {}): 
   const request = (async () => {
     const response = await fetch(path, {
       ...init,
-      cache: init.cache ?? "no-cache",
+      // API payloads are already revision-cached by the catalog service. Using
+      // `no-cache` here makes browsers send If-None-Match and can surface a 304
+      // to this JSON-only client, which has no response body to parse. Always
+      // request a body and let the API's in-process cache keep it inexpensive.
+      cache: init.cache ?? "no-store",
       signal: combinedSignal(signal, timeoutMs),
       headers: { Accept: "application/json", ...init.headers },
     });

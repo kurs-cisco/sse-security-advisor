@@ -1,0 +1,47 @@
+{
+  "app": "npx tsx bin/cbom-workbench.ts",
+  "context": {
+    "account": "135124134289",
+    "region": "us-gov-east-1",
+    "vpcId": "vpc-0ea02619196158906",
+    "hostedZoneId": "Z05545293QU8ODM3LWN77",
+    "hostedZoneName": "swg.dev-umbrellagov.com",
+    "hostname": "cbom.swg.dev-umbrellagov.com",
+    "publicSubnetIds": [
+      "subnet-0ff94caaa51f990fd",
+      "subnet-0c7ab18c2e596ceda",
+      "subnet-09749f717491672e1"
+    ],
+    "publicSubnetRouteTableIds": [
+      "rtb-076b5d483cd53396e",
+      "rtb-076b5d483cd53396e",
+      "rtb-076b5d483cd53396e"
+    ],
+    "privateSubnetIds": [
+      "subnet-0a79a031b7da0ee66",
+      "subnet-0f1689d4dc8f2ad5d",
+      "subnet-06bec111d36991f2a"
+    ],
+    "privateSubnetRouteTableIds": [
+      "rtb-000a43e76d07f74a0",
+      "rtb-0e552cc58b28a63f0",
+      "rtb-0bcaa4d80f93320f1"
+    ],
+    "availabilityZones": [
+      "us-gov-east-1a",
+      "us-gov-east-1b",
+      "us-gov-east-1c"
+    ],
+    "imageTag": "deploy-20260922-3",
+    "oidcClientId": "DIIYIKV2YSWCYEYECY3L",
+    "oidcIssuer": "https://sso-345c0691.sso.duosecurity.com/oidc/DIIYIKV2YSWCYEYECY3L",
+    "oidcAuthorizationEndpoint": "https://sso-345c0691.sso.duosecurity.com/oidc/DIIYIKV2YSWCYEYECY3L/authorize",
+    "oidcTokenEndpoint": "https://sso-345c0691.sso.duosecurity.com/oidc/DIIYIKV2YSWCYEYECY3L/token",
+    "oidcUserInfoEndpoint": "https://sso-345c0691.sso.duosecurity.com/oidc/DIIYIKV2YSWCYEYECY3L/userinfo",
+    "oidcSecretArn": "arn:aws-us-gov:secretsmanager:us-gov-east-1:135124134289:secret:/cbom-workbench/dev/oidc-client-secret-vlIoa0",
+    "apiBearerSecretArn": "arn:aws-us-gov:secretsmanager:us-gov-east-1:135124134289:secret:/cbom-workbench/dev/api-bearer-token-MYmjvN",
+    "reuseRetainedBootstrapResources": true,
+    "activateServices": true,
+    "enableOidc": true
+  }
+}
