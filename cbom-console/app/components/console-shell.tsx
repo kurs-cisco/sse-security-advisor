@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, Boxes, ClipboardCheck, Database, Info, Moon, PanelLeft, Sun, UsersRound } from "lucide-react";
+import { Activity, Boxes, ClipboardCheck, Database, Info, Moon, PanelLeft, ShieldCheck, Sun, UsersRound } from "lucide-react";
 import { useEffect, useState } from "react";
 import { cn } from "@/app/lib/utils";
 
-const nav = [
+const baseNav = [
   { href: "/", label: "Overview", icon: Activity },
   { href: "/inventory", label: "Inventory", icon: Database },
   { href: "/accountability", label: "Accountability", icon: UsersRound },
@@ -17,14 +17,22 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [dark, setDark] = useState(false);
   const [compact, setCompact] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
   useEffect(() => {
     const stored = window.localStorage.getItem("cbom-theme");
     const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
     const useDark = stored ? stored === "dark" : prefersDark;
     document.documentElement.classList.toggle("dark", useDark);
     const update = window.setTimeout(() => setDark(useDark), 0);
+    void fetch("/api/v1/auth/me", { cache: "no-store" })
+      .then((response) => response.ok ? response.json() : null)
+      .then((identity: { role?: string } | null) => setIsAdmin(identity?.role === "admin"))
+      .catch(() => setIsAdmin(false));
     return () => window.clearTimeout(update);
   }, []);
+  const nav = isAdmin
+    ? [...baseNav, { href: "/admin", label: "Admin", icon: ShieldCheck }]
+    : baseNav;
   const toggleTheme = () => {
     setDark((current) => {
       const next = !current;
@@ -46,7 +54,7 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
         </nav>
         <div className="sidebar-foot">
           <div className="connection-pill"><span className="connection-dot" />Catalog workspace</div>
-          {!compact && <p>Read-only analysis workspace</p>}
+          {!compact && <p>{isAdmin ? "Administrative evidence workspace" : "Read-only analysis workspace"}</p>}
         </div>
       </aside>
       <div className="console-main">

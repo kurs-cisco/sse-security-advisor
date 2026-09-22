@@ -1,4 +1,4 @@
-.PHONY: up down migrate ingest refresh force-refresh inventory test logs
+.PHONY: up down migrate ingest service-impact refresh force-refresh inventory test logs
 
 up:
 	docker compose up -d postgres migrate api web
@@ -11,6 +11,9 @@ migrate:
 
 ingest:
 	docker compose --profile tools run --rm ingest
+
+service-impact:
+	docker compose --profile tools run --rm service-impact
 
 refresh: ingest
 

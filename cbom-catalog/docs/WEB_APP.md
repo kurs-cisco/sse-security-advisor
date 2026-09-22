@@ -84,8 +84,11 @@ is blocked in production unless an explicit insecure override is set. Cloud mode
 verifies the ALB-signed OIDC token and requires a separate bearer-token trust
 boundary between Next.js and FastAPI. Raw document APIs are disabled by default.
 
-The application is read-only. Ingestion, migration, deletion, and raw-source
-distribution remain operator workflows. See [OPERATIONS.md](OPERATIONS.md).
+Imported evidence remains read-only. Administrators can manage application
+access and add audited, versioned overlays without changing source records or
+checksums. Ingestion, source deletion, and raw-source distribution remain
+operator workflows. See [ACCESS_CONTROL_AND_OVERLAYS.md](ACCESS_CONTROL_AND_OVERLAYS.md)
+and [OPERATIONS.md](OPERATIONS.md).
 
 ## Verification
 

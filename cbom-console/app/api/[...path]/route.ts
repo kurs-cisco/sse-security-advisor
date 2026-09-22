@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { verifyAlbOidcToken } from "@/app/lib/alb-oidc";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,6 +21,17 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   headers.set("accept-encoding", "identity");
   const token = process.env.CBOM_API_BEARER_TOKEN;
   if (token) headers.set("authorization", `Bearer ${token}`);
+  const oidcToken = request.headers.get("x-amzn-oidc-data");
+  if (oidcToken) {
+    const verification = await verifyAlbOidcToken(oidcToken);
+    if (!verification.ok) {
+      return Response.json({ detail: verification.reason }, { status: 401, headers: { "Cache-Control": "no-store" } });
+    }
+    headers.set("x-cbom-user-sub", verification.identity.subject);
+    headers.set("x-cbom-user-email", verification.identity.email);
+    headers.set("x-cbom-user-issuer", process.env.CBOM_OIDC_ISSUER ?? "");
+    if (verification.identity.name) headers.set("x-cbom-user-name", verification.identity.name);
+  }
 
   try {
     const upstream = await fetch(target, {
@@ -41,3 +53,6 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
 export const GET = proxy;
 export const HEAD = proxy;
 export const OPTIONS = proxy;
+export const POST = proxy;
+export const PATCH = proxy;
+export const DELETE = proxy;

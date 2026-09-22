@@ -138,6 +138,27 @@ services:
       - ${CBOM_TARGET_MODULES_FILE:-../FIPS-140-3-21-sept.json}:/data/target-modules.json:ro
     command: ["cbom-catalog", "import-target-modules", "/data/target-modules.json"]
 
+  service-impact:
+    image: ${CBOM_CATALOG_IMAGE:-cbom-catalog:local}
+    build:
+      context: .
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+    profiles: ["tools"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      PGHOST: ${DATABASE_HOST:-postgres}
+      PGPORT: ${DATABASE_PORT:-5432}
+      PGDATABASE: ${POSTGRES_DB:-cbom_catalog}
+      PGUSER: ${POSTGRES_USER:-cbom}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-cbom_local_only}
+      CBOM_SOURCE_COLLECTION: ${CBOM_SOURCE_COLLECTION:-sse-cboms}
+    volumes:
+      - ${CBOM_SERVICE_IMPACT_FILE:-../service_impact.csv}:/data/service_impact.csv:ro
+    command: ["cbom-catalog", "import-service-impact", "/data/service_impact.csv"]
+
   target-public-evidence:
     image: ${CBOM_CATALOG_IMAGE:-cbom-catalog:local}
     build:

@@ -107,6 +107,25 @@ no-op. `team_target_module` retains every raw module row and its record checksum
 one import is marked active for current views. A database snapshot therefore
 contains both the catalog and the planning-data provenance.
 
+### Service-impact planning import
+
+The service-impact spreadsheet export is a separate checksum-gated planning
+input. The importer reads the team identity only to map rows to service groups
+and retains exactly three source columns: `Impact on POA&M`, `Risk Category`,
+and `Comments`.
+
+```bash
+CBOM_SERVICE_IMPACT_FILE=../service_impact.csv \
+  docker compose --profile tools run --rm service-impact
+```
+
+Owner, lead, CBOM availability/validity, IL2, IL5, and every other spreadsheet
+column are deliberately ignored and cannot overwrite Team Tracker or catalog
+values. Imported fields are `user_asserted` planning context with review
+required; they are not validation evidence, accepted risk, an assessor
+conclusion, or an authorization decision. The active import retains the exact
+source filename and SHA-256 plus row-level checksums and selected-field payloads.
+
 ## Assessment pipeline
 
 The assessment engine is deterministic and scoped by source collection and,
@@ -167,6 +186,8 @@ mode, ATO scope, impact, owner, dates, and disposition.
 - `ingest_run` records parser version, refresh mode, counts, and outcome.
 - Target-module planning data is pinned to its source filename, source SHA-256,
   raw JSON, immutable import ID, and record SHA-256 values.
+- Service-impact planning data is pinned to its source filename and SHA-256;
+  only the three selected fields and mapping identity are retained per row.
 - Assessment results include a policy version, run ID, evidence fingerprints,
   scope, limitations, and explicit review requirements.
 - POA&M IDs and workstream IDs are derived from stable deduplication inputs.

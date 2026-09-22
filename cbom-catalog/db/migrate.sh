@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+MIGRATION_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
 PSQL="psql -v ON_ERROR_STOP=1 -h ${PGHOST:-postgres} -U ${PGUSER:-cbom} -d ${PGDATABASE:-cbom_catalog}"
 
 $PSQL -c "CREATE TABLE IF NOT EXISTS schema_migration (
@@ -19,7 +21,7 @@ if [ "$has_catalog_meta" = "catalog_meta" ]; then
   fi
 fi
 
-for migration in /db/[0-9][0-9][0-9]_*.sql; do
+for migration in "$MIGRATION_DIR"/[0-9][0-9][0-9]_*.sql; do
   filename=${migration##*/}
   version=${filename%%_*}
   applied=$($PSQL -Atqc "SELECT 1 FROM schema_migration WHERE version = '$version'")
@@ -30,4 +32,3 @@ for migration in /db/[0-9][0-9][0-9]_*.sql; do
     $PSQL -f "$migration"
   fi
 done
-

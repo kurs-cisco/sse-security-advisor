@@ -19,6 +19,8 @@ API directly. The proxy can attach an internal bearer token at runtime.
 - **POA&M** — draft FIPS 140-3 candidate register, Team Tracker owner/lead and
   IL2/IL5 planning data, expandable evidence/remediation details, asset and
   workstream CSV exports, and a compliance ZIP.
+- **Admin** — visible only to application administrators; manages viewer/admin
+  access, one-time scoped API credentials, and audited versioned overlays.
 
 Light and dark themes share the same semantic color tokens and the selected
 theme is retained in local browser storage. Tables remain horizontally scrollable
@@ -74,10 +76,14 @@ Set `CBOM_ENVIRONMENT=production`, `CBOM_API_AUTH_MODE=bearer`, and a random
 only on the Next.js server. Set `CBOM_AUTH_MODE=alb-oidc`, `CBOM_ALB_ARN`, and
 `CBOM_OIDC_CLIENT_ID` on the console and configure the HTTPS ALB listener with
 the OIDC provider. The console verifies the ALB-signed claim, expected signer,
-client ID, expiry, and GovCloud regional signing key. Do not expose PostgreSQL
-or the API directly.
+client ID, expiry, and GovCloud regional signing key. The separate API hostname
+accepts only application-issued, scoped bearer credentials and forwards directly
+to FastAPI; it never accepts browser OIDC cookies. Do not expose PostgreSQL.
 The API fails closed in production when authentication is disabled or the token
 is missing. `proxy` mode is also available for a trusted identity-aware proxy.
+
+See [application access and overlays](../cbom-catalog/docs/ACCESS_CONTROL_AND_OVERLAYS.md)
+for role, invitation, credential, audit, and immutable-evidence behavior.
 
 See the catalog's
 [cloud authentication and deployment assessment](../cbom-catalog/docs/CLOUD_AUTH_AND_DEPLOYMENT.md)

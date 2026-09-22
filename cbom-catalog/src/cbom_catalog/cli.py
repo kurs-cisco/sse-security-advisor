@@ -74,6 +74,18 @@ def main() -> None:
     catalog_evidence_parser.add_argument("path", type=Path)
     catalog_evidence_parser.add_argument("--database-url", default=os.environ.get("DATABASE_URL"))
 
+    service_impact_parser = subparsers.add_parser(
+        "import-service-impact",
+        help="Import checksum-gated team POA&M impact, risk category, and comments",
+    )
+    service_impact_parser.add_argument("path", type=Path)
+    service_impact_parser.add_argument("--database-url", default=os.environ.get("DATABASE_URL"))
+    service_impact_parser.add_argument(
+        "--collection",
+        default=os.environ.get("CBOM_SOURCE_COLLECTION", "sse-cboms"),
+        help="Source collection whose service groups inherit the team planning rows",
+    )
+
     args = parser.parse_args()
     if args.command == "inventory":
         result = build_inventory(args.root, limit=args.limit)
@@ -117,6 +129,20 @@ def main() -> None:
         from .target_modules import import_catalog_claim_evidence
 
         print(json.dumps(import_catalog_claim_evidence(args.path, args.database_url), indent=2))
+        return
+    if args.command == "import-service-impact":
+        from .service_impact import import_service_impacts
+
+        print(
+            json.dumps(
+                import_service_impacts(
+                    args.path,
+                    args.database_url,
+                    source_collection=args.collection,
+                ),
+                indent=2,
+            )
+        )
 
 
 def _env_bool(name: str, default: bool) -> bool:

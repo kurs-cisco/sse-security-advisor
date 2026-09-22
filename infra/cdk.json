@@ -7,6 +7,7 @@
     "hostedZoneId": "Z05545293QU8ODM3LWN77",
     "hostedZoneName": "swg.dev-umbrellagov.com",
     "hostname": "cbom.swg.dev-umbrellagov.com",
+    "apiHostname": "api.cbom.swg.dev-umbrellagov.com",
     "publicSubnetIds": [
       "subnet-0ff94caaa51f990fd",
       "subnet-0c7ab18c2e596ceda",
@@ -32,7 +33,7 @@
       "us-gov-east-1b",
       "us-gov-east-1c"
     ],
-    "imageTag": "deploy-20260922-3",
+    "imageTag": "deploy-20260922-8",
     "oidcClientId": "DIIYIKV2YSWCYEYECY3L",
     "oidcIssuer": "https://sso-345c0691.sso.duosecurity.com/oidc/DIIYIKV2YSWCYEYECY3L",
     "oidcAuthorizationEndpoint": "https://sso-345c0691.sso.duosecurity.com/oidc/DIIYIKV2YSWCYEYECY3L/authorize",
@@ -40,6 +41,7 @@
     "oidcUserInfoEndpoint": "https://sso-345c0691.sso.duosecurity.com/oidc/DIIYIKV2YSWCYEYECY3L/userinfo",
     "oidcSecretArn": "arn:aws-us-gov:secretsmanager:us-gov-east-1:135124134289:secret:/cbom-workbench/dev/oidc-client-secret-vlIoa0",
     "apiBearerSecretArn": "arn:aws-us-gov:secretsmanager:us-gov-east-1:135124134289:secret:/cbom-workbench/dev/api-bearer-token-MYmjvN",
+    "apiTokenPepperArn": "arn:aws-us-gov:secretsmanager:us-gov-east-1:135124134289:secret:/cbom-workbench/dev/api-token-pepper-TjfS5D",
     "reuseRetainedBootstrapResources": true,
     "activateServices": true,
     "enableOidc": true

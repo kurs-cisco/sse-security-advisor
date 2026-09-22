@@ -6,7 +6,14 @@ type AlbJwtHeader = {
   signer?: string;
 };
 
-type VerificationResult = { ok: true; subject?: string } | { ok: false; reason: string };
+export type AlbIdentity = {
+  subject: string;
+  email: string;
+  name?: string;
+  groups: string[];
+};
+
+type VerificationResult = { ok: true; identity: AlbIdentity } | { ok: false; reason: string };
 
 const keyCache = new Map<string, Promise<CryptoKey>>();
 const GOVCLOUD_KEY_ORIGINS: Record<string, string> = {
@@ -87,8 +94,17 @@ export async function verifyAlbOidcToken(token: string): Promise<VerificationRes
       new TextEncoder().encode(`${encodedHeader}.${encodedPayload}`),
     );
     if (!verified) return { ok: false, reason: "Identity signature is invalid" };
-    const claims = decodeJson<{ sub?: string }>(encodedPayload);
-    return { ok: true, subject: claims.sub };
+    const claims = decodeJson<{ sub?: string; email?: string; name?: string; groups?: string[] | string }>(encodedPayload);
+    if (!claims.sub || !claims.email) return { ok: false, reason: "Identity subject and email are required" };
+    const groups = Array.isArray(claims.groups)
+      ? claims.groups.map(String)
+      : typeof claims.groups === "string"
+        ? claims.groups.split(/[ ,]+/).filter(Boolean)
+        : [];
+    return {
+      ok: true,
+      identity: { subject: claims.sub, email: claims.email, name: claims.name, groups },
+    };
   } catch {
     return { ok: false, reason: "Identity token could not be verified" };
   }

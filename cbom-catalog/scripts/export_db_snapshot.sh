@@ -19,7 +19,8 @@ docker compose exec -T postgres pg_dump \
   --format custom \
   --compress 9 \
   --no-owner \
-  --no-acl > "${temporary_path}"
+  --no-acl \
+  --exclude-schema app_auth > "${temporary_path}"
 
 mv "${temporary_path}" "${output_path}"
 chmod 600 "${output_path}"
@@ -66,7 +67,8 @@ SELECT jsonb_pretty(jsonb_build_object(
       ORDER BY ir.id DESC LIMIT 1
     ) run_row),
     'data_classification', 'Candidate crypto inventory and assessment working data; authorized review required',
-    'raw_source_bytes_included', false
+    'raw_source_bytes_included', false,
+    'application_identity_schema_included', false
   ));
 SQL
 mv "${temporary_manifest_path}" "${manifest_path}"

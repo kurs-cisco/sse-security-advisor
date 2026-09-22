@@ -34,6 +34,7 @@ export class CbomWorkbenchStack extends cdk.Stack {
     const zoneId = requiredContext(this, "hostedZoneId");
     const zoneName = requiredContext(this, "hostedZoneName");
     const hostname = requiredContext(this, "hostname");
+    const apiHostname = requiredContext(this, "apiHostname");
     const imageTag = requiredContext(this, "imageTag");
     const availabilityZones = this.node.tryGetContext("availabilityZones") as string[];
     const publicSubnetIds = this.node.tryGetContext("publicSubnetIds") as string[];
@@ -140,6 +141,18 @@ export class CbomWorkbenchStack extends cdk.Stack {
           generateSecretString: { excludePunctuation: true, passwordLength: 64 },
           removalPolicy: cdk.RemovalPolicy.RETAIN,
         });
+    const apiTokenPepper: secretsmanager.ISecret = reuseRetainedBootstrapResources
+      ? secretsmanager.Secret.fromSecretCompleteArn(
+          this,
+          "ApiTokenPepper",
+          requiredContext(this, "apiTokenPepperArn"),
+        )
+      : new secretsmanager.Secret(this, "ApiTokenPepper", {
+          secretName: "/cbom-workbench/dev/api-token-pepper",
+          description: "HMAC pepper for one-time CBOM application API credentials",
+          generateSecretString: { excludePunctuation: true, passwordLength: 64 },
+          removalPolicy: cdk.RemovalPolicy.RETAIN,
+        });
 
     const albSecurityGroup = new ec2.SecurityGroup(this, "AlbSecurityGroup", {
       vpc,
@@ -160,6 +173,7 @@ export class CbomWorkbenchStack extends cdk.Stack {
       description: "CBOM Next.js workload",
     });
     webSecurityGroup.addIngressRule(albSecurityGroup, ec2.Port.tcp(3000), "Only the ALB may reach Next.js");
+    webSecurityGroup.addIngressRule(albSecurityGroup, ec2.Port.tcp(8000), "Only the ALB may reach the token API");
 
     const jobSecurityGroup = new ec2.SecurityGroup(this, "JobSecurityGroup", {
       vpc,
@@ -259,11 +273,13 @@ export class CbomWorkbenchStack extends cdk.Stack {
         CBOM_API_STATEMENT_TIMEOUT_MS: "20000",
         CBOM_API_PREWARM: "true",
         CBOM_ASSESSMENT_TIMEZONE: "Asia/Kolkata",
+        CBOM_OIDC_ISSUER: requiredContext(this, "oidcIssuer"),
       },
       secrets: {
         PGUSER: ecs.Secret.fromSecretsManager(databaseSecret, "username"),
         PGPASSWORD: ecs.Secret.fromSecretsManager(databaseSecret, "password"),
         CBOM_API_BEARER_TOKEN: ecs.Secret.fromSecretsManager(apiBearerSecret),
+        CBOM_API_TOKEN_PEPPER: ecs.Secret.fromSecretsManager(apiTokenPepper),
       },
       healthCheck: {
         command: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)\" || exit 1"],
@@ -271,6 +287,54 @@ export class CbomWorkbenchStack extends cdk.Stack {
         timeout: cdk.Duration.seconds(5),
         retries: 3,
         startPeriod: cdk.Duration.seconds(30),
+      },
+    });
+    apiContainer.addPortMappings({ containerPort: 8000, protocol: ecs.Protocol.TCP });
+
+    const accessLogBucketName = `cbom-workbench-access-logs-${this.account}-${this.region}`;
+    const accessLogBucket: s3.IBucket = reuseRetainedBootstrapResources
+      ? s3.Bucket.fromBucketName(this, "AccessLogBucket", accessLogBucketName)
+      : new s3.Bucket(this, "AccessLogBucket", {
+          bucketName: accessLogBucketName,
+          blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+          enforceSSL: true,
+          encryption: s3.BucketEncryption.S3_MANAGED,
+          versioned: false,
+          removalPolicy: cdk.RemovalPolicy.RETAIN,
+          lifecycleRules: [{ id: "expire-access-logs", expiration: cdk.Duration.days(90) }],
+        });
+
+    new s3.CfnBucketPolicy(this, "AccessLogBucketPolicy", {
+      bucket: accessLogBucket.bucketName,
+      policyDocument: {
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Sid: "AllowLogDeliveryAclCheck",
+            Effect: "Allow",
+            Principal: { Service: "delivery.logs.amazonaws.com" },
+            Action: "s3:GetBucketAcl",
+            Resource: accessLogBucket.bucketArn,
+          },
+          {
+            Sid: "AllowAlbLogDelivery",
+            Effect: "Allow",
+            Principal: {
+              AWS: `arn:${cdk.Aws.PARTITION}:iam::190560391635:root`,
+              Service: "delivery.logs.amazonaws.com",
+            },
+            Action: "s3:PutObject",
+            Resource: `${accessLogBucket.bucketArn}/alb/AWSLogs/${this.account}/*`,
+          },
+          {
+            Sid: "DenyInsecureTransport",
+            Effect: "Deny",
+            Principal: "*",
+            Action: "s3:*",
+            Resource: [accessLogBucket.bucketArn, `${accessLogBucket.bucketArn}/*`],
+            Condition: { Bool: { "aws:SecureTransport": "false" } },
+          },
+        ],
       },
     });
 
@@ -283,9 +347,16 @@ export class CbomWorkbenchStack extends cdk.Stack {
       dropInvalidHeaderFields: true,
       deletionProtection: true,
     });
+    loadBalancer.setAttribute("access_logs.s3.enabled", "true");
+    loadBalancer.setAttribute("access_logs.s3.bucket", accessLogBucket.bucketName);
+    loadBalancer.setAttribute("access_logs.s3.prefix", "alb");
 
     const certificate = new acm.Certificate(this, "Certificate", {
       domainName: hostname,
+      validation: acm.CertificateValidation.fromDns(zone),
+    });
+    const apiCertificate = new acm.Certificate(this, "ApiCertificate", {
+      domainName: apiHostname,
       validation: acm.CertificateValidation.fromDns(zone),
     });
     const listener = loadBalancer.addListener("HttpsListener", {
@@ -297,6 +368,7 @@ export class CbomWorkbenchStack extends cdk.Stack {
         messageBody: "CBOM Workbench authentication is being configured.",
       }),
     });
+    listener.addCertificates("ApiCertificate", [apiCertificate]);
     loadBalancer.addListener("HttpListener", {
       port: 80,
       protocol: elbv2.ApplicationProtocol.HTTP,
@@ -308,6 +380,21 @@ export class CbomWorkbenchStack extends cdk.Stack {
       vpc,
       protocol: elbv2.ApplicationProtocol.HTTP,
       port: 3000,
+      targetType: elbv2.TargetType.IP,
+      deregistrationDelay: cdk.Duration.seconds(30),
+      healthCheck: {
+        enabled: true,
+        path: "/healthz",
+        healthyHttpCodes: "200",
+        interval: cdk.Duration.seconds(30),
+        timeout: cdk.Duration.seconds(5),
+      },
+    });
+    const apiTargetGroup = new elbv2.ApplicationTargetGroup(this, "ApiTargetGroup", {
+      targetGroupName: "cbom-workbench-api",
+      vpc,
+      protocol: elbv2.ApplicationProtocol.HTTP,
+      port: 8000,
       targetType: elbv2.TargetType.IP,
       deregistrationDelay: cdk.Duration.seconds(30),
       healthCheck: {
@@ -333,6 +420,7 @@ export class CbomWorkbenchStack extends cdk.Stack {
         CBOM_AUTH_MODE: "alb-oidc",
         CBOM_ALB_ARN: loadBalancer.loadBalancerArn,
         CBOM_OIDC_CLIENT_ID: oidcClientId,
+        CBOM_OIDC_ISSUER: requiredContext(this, "oidcIssuer"),
         NODE_ENV: "production",
         NEXT_TELEMETRY_DISABLED: "1",
       },
@@ -369,6 +457,10 @@ export class CbomWorkbenchStack extends cdk.Stack {
     targetGroup.addTarget(webService.loadBalancerTarget({
       containerName: "web",
       containerPort: 3000,
+    }));
+    apiTargetGroup.addTarget(webService.loadBalancerTarget({
+      containerName: "api",
+      containerPort: 8000,
     }));
 
     const jobTask = new ecs.FargateTaskDefinition(this, "JobTask", {
@@ -415,16 +507,26 @@ export class CbomWorkbenchStack extends cdk.Stack {
           userInfoEndpoint: oidcUserInfoEndpoint,
           clientId: oidcClientId,
           clientSecret: oidcSecret.secretValue,
-          scope: "openid groups",
+          scope: "openid email groups",
           sessionCookieName: "CBOMAWSELBAuthSessionCookie",
           sessionTimeout: cdk.Duration.hours(8),
           onUnauthenticatedRequest: elbv2.UnauthenticatedAction.AUTHENTICATE,
           next: elbv2.ListenerAction.forward([targetGroup]),
         }),
       });
+      listener.addTargetGroups("TokenApi", {
+        priority: 7,
+        conditions: [elbv2.ListenerCondition.hostHeaders([apiHostname])],
+        targetGroups: [apiTargetGroup],
+      });
       new route53.ARecord(this, "AliasRecord", {
         zone,
         recordName: hostname,
+        target: route53.RecordTarget.fromAlias(new route53Targets.LoadBalancerTarget(loadBalancer)),
+      });
+      new route53.ARecord(this, "ApiAliasRecord", {
+        zone,
+        recordName: apiHostname,
         target: route53.RecordTarget.fromAlias(new route53Targets.LoadBalancerTarget(loadBalancer)),
       });
     }
@@ -460,6 +562,8 @@ export class CbomWorkbenchStack extends cdk.Stack {
     new cdk.CfnOutput(this, "JobSecurityGroupId", { value: jobSecurityGroup.securityGroupId });
     new cdk.CfnOutput(this, "PrivateSubnetIds", { value: privateSubnetIds.join(",") });
     new cdk.CfnOutput(this, "Hostname", { value: hostname });
+    new cdk.CfnOutput(this, "ApiHostname", { value: apiHostname });
+    new cdk.CfnOutput(this, "ApiTokenPepperSecretName", { value: apiTokenPepper.secretName });
     new cdk.CfnOutput(this, "ServicesActivated", { value: String(activateServices) });
     new cdk.CfnOutput(this, "OidcEnabled", { value: String(enableOidc) });
   }

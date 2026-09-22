@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import io
 import json
 import logging
@@ -21,8 +20,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from psycopg.types.json import Jsonb
+from pydantic import BaseModel, Field
 
 from . import __version__
+from .access_control import (
+    ALLOWED_TOKEN_SCOPES,
+    AccessDenied,
+    Principal,
+    authenticate_request,
+    generate_api_token,
+    read_scope_for_path,
+    require_admin,
+    require_scope,
+    token_expiration,
+)
 from .api_database import close_pool
 from .api_database import connection as api_connection
 from .fips_assessment import (
@@ -32,6 +44,7 @@ from .fips_assessment import (
     render_portfolio_poam_csv,
     render_workstream_csv,
 )
+from .service_impact import load_active_service_impacts
 from .target_modules import load_active_target_modules
 from .team_milestones import (
     build_portfolio_poam_items,
@@ -77,6 +90,24 @@ _cache_revision: int | None = None
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 
+class UserAccessUpdate(BaseModel):
+    role: str | None = None
+    status: str | None = None
+
+
+class ApiCredentialCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    scopes: list[str] = Field(min_length=1, max_length=8)
+    expires_in_days: int = Field(default=30, ge=1, le=90)
+
+
+class OverlayCreate(BaseModel):
+    resource_type: str
+    resource_key: str = Field(min_length=1, max_length=240)
+    payload: dict[str, Any]
+    rationale: str = Field(min_length=8, max_length=2_000)
+
+
 def _production_mode() -> bool:
     return os.environ.get("CBOM_ENVIRONMENT", "local").strip().casefold() in {
         "production",
@@ -109,39 +140,6 @@ def _authentication_error(request_id: str, detail: str, status_code: int) -> Res
     if status_code == 401:
         response.headers["WWW-Authenticate"] = "Bearer"
     return _security_headers(response, request_id)
-
-
-def _authenticated_subject(request: Request) -> tuple[str | None, Response | None]:
-    mode = os.environ.get("CBOM_API_AUTH_MODE", "disabled").strip().casefold()
-    request_id = request.state.request_id
-    if mode == "disabled":
-        if _production_mode():
-            return None, _authentication_error(
-                request_id,
-                "Authentication must be configured when CBOM_ENVIRONMENT is production",
-                503,
-            )
-        return "local-development", None
-    if mode == "bearer":
-        expected = os.environ.get("CBOM_API_BEARER_TOKEN", "")
-        if not expected or (_production_mode() and len(expected) < 32):
-            return None, _authentication_error(
-                request_id,
-                "A bearer token of at least 32 characters is required",
-                503,
-            )
-        scheme, _, supplied = request.headers.get("authorization", "").partition(" ")
-        if scheme.casefold() != "bearer" or not hmac.compare_digest(supplied, expected):
-            return None, _authentication_error(request_id, "Authentication required", 401)
-        return "bearer-client", None
-    if mode == "proxy":
-        expected = os.environ.get("CBOM_AUTH_PROXY_SECRET", "")
-        supplied = request.headers.get("x-cbom-proxy-token", "")
-        subject = request.headers.get("x-authenticated-user", "").strip()
-        if not expected or not subject or not hmac.compare_digest(supplied, expected):
-            return None, _authentication_error(request_id, "Trusted proxy identity required", 401)
-        return subject, None
-    return None, _authentication_error(request_id, f"Unsupported auth mode: {mode}", 503)
 
 
 def _client_key(request: Request) -> str:
@@ -193,9 +191,14 @@ async def access_controls(request: Request, call_next):  # type: ignore[no-untyp
     started = time.perf_counter()
     subject = "health-check"
     if request.url.path not in {"/healthz", "/api/v1/health"}:
-        subject, error = _authenticated_subject(request)
-        if error is not None:
-            return error
+        try:
+            principal = authenticate_request(request, production=_production_mode())
+            request.state.principal = principal
+            subject = principal.subject
+            if request.method in {"GET", "HEAD"} and principal.kind in {"token", "service"}:
+                require_scope(principal, read_scope_for_path(request.url.path))
+        except AccessDenied as error:
+            return _authentication_error(request_id, error.detail, error.status_code)
         if _rate_limited(request):
             response = JSONResponse({"detail": "Rate limit exceeded"}, status_code=429)
             response.headers["Retry-After"] = "60"
@@ -279,21 +282,42 @@ def _catalog_revision() -> int:
         """
         SELECT coalesce((SELECT max(id) FROM ingest_run), 0) AS ingest_revision,
                coalesce((SELECT max(id) FROM target_module_import), 0) AS target_revision,
-               coalesce((SELECT max(id) FROM target_module_evidence_import), 0) AS evidence_revision
+               coalesce((SELECT max(id) FROM target_module_evidence_import), 0) AS evidence_revision,
+               coalesce((SELECT max(id) FROM service_impact_import), 0) AS service_impact_revision,
+               coalesce((SELECT max(id) FROM app_auth.admin_overlay), 0) AS overlay_revision
         """
     )
     # Keep one numeric revision for cache and ETag compatibility while ensuring
     # a planning-data import invalidates assessment and register responses.
     return (
-        int((row or {}).get("ingest_revision") or 0) * 1_000_000_000_000
-        + int((row or {}).get("target_revision") or 0) * 1_000_000
-        + int((row or {}).get("evidence_revision") or 0)
+        int((row or {}).get("ingest_revision") or 0) * 1_000_000_000_000_000_000_000_000
+        + int((row or {}).get("target_revision") or 0) * 1_000_000_000_000_000_000
+        + int((row or {}).get("evidence_revision") or 0) * 1_000_000_000_000
+        + int((row or {}).get("service_impact_revision") or 0) * 1_000_000
+        + int((row or {}).get("overlay_revision") or 0)
     )
 
 
 def _active_target_module_contract() -> dict[str, Any] | None:
     with api_connection() as connection:
         return load_active_target_modules(connection)
+
+
+def _active_service_impact_map() -> dict[str, dict[str, Any]]:
+    with api_connection() as connection:
+        return load_active_service_impacts(connection)
+
+
+def _active_overlay_map(resource_type: str) -> dict[str, dict[str, Any]]:
+    rows = _fetch_all(
+        """
+        SELECT resource_key, version, payload, rationale, created_at
+        FROM app_auth.admin_overlay
+        WHERE resource_type = %s AND is_active
+        """,
+        (resource_type,),
+    )
+    return {str(row["resource_key"]): row for row in rows}
 
 
 def _cached_catalog_value(
@@ -614,6 +638,374 @@ def health() -> dict[str, Any]:
     return {"status": "ok", **(row or {})}
 
 
+def _request_principal(request: Request) -> Principal:
+    principal = getattr(request.state, "principal", None)
+    if not isinstance(principal, Principal):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return principal
+
+
+def _admin_principal(request: Request, scope: str | None = None) -> Principal:
+    principal = _request_principal(request)
+    return _require_admin(principal, scope)
+
+
+def _require_admin(principal: Principal, scope: str | None = None) -> Principal:
+    try:
+        require_admin(principal)
+        if principal.kind == "token" and scope:
+            require_scope(principal, scope)
+    except AccessDenied as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    return principal
+
+
+def _actor_columns(principal: Principal) -> tuple[int | None, str | None]:
+    if principal.kind == "token" and principal.credential_id:
+        return None, principal.credential_id
+    if principal.user_id is not None:
+        return principal.user_id, None
+    raise HTTPException(status_code=403, detail="A provisioned administrator identity is required")
+
+
+def _audit_event(
+    database,  # type: ignore[no-untyped-def]
+    request: Request,
+    principal: Principal,
+    *,
+    action: str,
+    resource_type: str,
+    resource_key: str,
+    before_state: Any = None,
+    after_state: Any = None,
+) -> None:
+    user_id, credential_id = _actor_columns(principal)
+    database.execute(
+        """
+        INSERT INTO app_auth.audit_event
+            (request_id, actor_user_id, actor_credential_id, action,
+             resource_type, resource_key, before_state, after_state)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            request.state.request_id,
+            user_id,
+            credential_id,
+            action,
+            resource_type,
+            resource_key,
+            Jsonb(jsonable_encoder(before_state)) if before_state is not None else None,
+            Jsonb(jsonable_encoder(after_state)) if after_state is not None else None,
+        ),
+    )
+
+
+@app.get("/api/v1/auth/me", tags=["access control"])
+def current_user(request: Request) -> dict[str, Any]:
+    principal = _request_principal(request)
+    return {
+        "kind": principal.kind,
+        "email": principal.email,
+        "display_name": principal.display_name,
+        "role": principal.role,
+        "status": "active",
+        "scopes": sorted(principal.scopes),
+        "can_edit": principal.is_admin,
+    }
+
+
+@app.get("/api/v1/admin/users", tags=["access control"])
+def admin_users(request: Request) -> dict[str, Any]:
+    _admin_principal(request, "users:admin")
+    rows = _fetch_all(
+        """
+        SELECT id, email, display_name, role, status,
+               oidc_subject IS NOT NULL AS identity_bound,
+               created_at, updated_at, last_login_at
+        FROM app_auth.app_user
+        ORDER BY lower(email)
+        """
+    )
+    return {"items": rows, "total": len(rows)}
+
+
+@app.patch("/api/v1/admin/users/{user_id}", tags=["access control"])
+def update_admin_user(user_id: int, body: UserAccessUpdate, request: Request) -> dict[str, Any]:
+    principal = _admin_principal(request, "users:admin")
+    if body.role is not None and body.role not in {"viewer", "admin"}:
+        raise HTTPException(status_code=422, detail="Unsupported role")
+    if body.status is not None and body.status not in {"invited", "active", "disabled"}:
+        raise HTTPException(status_code=422, detail="Unsupported status")
+    if principal.user_id == user_id and (
+        (body.role is not None and body.role != "admin")
+        or (body.status is not None and body.status != "active")
+    ):
+        raise HTTPException(status_code=409, detail="Administrators cannot remove their own access")
+    with api_connection() as database:
+        before = database.execute(
+            "SELECT id, email, display_name, role, status FROM app_auth.app_user WHERE id = %s FOR UPDATE",
+            (user_id,),
+        ).fetchone()
+        if before is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        after = database.execute(
+            """
+            UPDATE app_auth.app_user
+            SET role = coalesce(%s, role), status = coalesce(%s, status), updated_at = now()
+            WHERE id = %s
+            RETURNING id, email, display_name, role, status, updated_at
+            """,
+            (body.role, body.status, user_id),
+        ).fetchone()
+        _audit_event(
+            database, request, principal, action="user.access.update",
+            resource_type="app_user", resource_key=str(user_id),
+            before_state=dict(before), after_state=dict(after or {}),
+        )
+        database.commit()
+    return dict(after or {})
+
+
+@app.get("/api/v1/admin/tokens", tags=["access control"])
+def admin_tokens(request: Request) -> dict[str, Any]:
+    principal = _admin_principal(request, "tokens:admin")
+    clauses = "" if principal.kind == "human" else "WHERE credential.owner_user_id = %s"
+    params: tuple[Any, ...] = () if principal.kind == "human" else (principal.user_id,)
+    rows = _fetch_all(
+        f"""
+        SELECT credential.id, credential.name, credential.token_prefix, credential.scopes,
+               credential.created_at, credential.expires_at, credential.last_used_at,
+               credential.revoked_at, app_user.email AS owner_email
+        FROM app_auth.api_credential credential
+        JOIN app_auth.app_user ON app_user.id = credential.owner_user_id
+        {clauses}
+        ORDER BY credential.created_at DESC
+        """,
+        params,
+    )
+    return {"items": rows, "total": len(rows)}
+
+
+@app.post("/api/v1/admin/tokens", tags=["access control"], status_code=201)
+def create_admin_token(body: ApiCredentialCreate, request: Request) -> dict[str, Any]:
+    principal = _admin_principal(request, "tokens:admin")
+    if principal.user_id is None:
+        raise HTTPException(status_code=403, detail="A provisioned administrator is required")
+    scopes = sorted(set(body.scopes))
+    unsupported = sorted(set(scopes) - ALLOWED_TOKEN_SCOPES)
+    if unsupported:
+        raise HTTPException(status_code=422, detail=f"Unsupported scopes: {', '.join(unsupported)}")
+    credential_id, token, digest = generate_api_token()
+    expires_at = token_expiration(body.expires_in_days)
+    prefix = f"cbw_{credential_id[:8]}"
+    with api_connection() as database:
+        row = database.execute(
+            """
+            INSERT INTO app_auth.api_credential
+                (id, owner_user_id, name, token_prefix, token_digest, scopes, expires_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id, name, token_prefix, scopes, created_at, expires_at
+            """,
+            (credential_id, principal.user_id, body.name.strip(), prefix, digest, scopes, expires_at),
+        ).fetchone()
+        _audit_event(
+            database, request, principal, action="api_credential.create",
+            resource_type="api_credential", resource_key=credential_id,
+            after_state={"name": body.name.strip(), "prefix": prefix, "scopes": scopes, "expires_at": expires_at},
+        )
+        database.commit()
+    return {**dict(row or {}), "token": token, "shown_once": True}
+
+
+@app.delete("/api/v1/admin/tokens/{credential_id}", tags=["access control"])
+def revoke_admin_token(credential_id: str, request: Request) -> dict[str, Any]:
+    principal = _admin_principal(request, "tokens:admin")
+    with api_connection() as database:
+        before = database.execute(
+            "SELECT id, name, token_prefix, scopes, revoked_at, owner_user_id FROM app_auth.api_credential WHERE id = %s FOR UPDATE",
+            (credential_id,),
+        ).fetchone()
+        if before is None:
+            raise HTTPException(status_code=404, detail="API credential not found")
+        if principal.kind == "token" and int(before["owner_user_id"]) != principal.user_id:
+            raise HTTPException(status_code=403, detail="Credential ownership mismatch")
+        after = database.execute(
+            "UPDATE app_auth.api_credential SET revoked_at = coalesce(revoked_at, now()) WHERE id = %s RETURNING id, name, token_prefix, scopes, revoked_at",
+            (credential_id,),
+        ).fetchone()
+        _audit_event(
+            database, request, principal, action="api_credential.revoke",
+            resource_type="api_credential", resource_key=credential_id,
+            before_state=dict(before), after_state=dict(after or {}),
+        )
+        database.commit()
+    return dict(after or {})
+
+
+_OVERLAY_FIELDS = {
+    "service_group": {"effective_owners", "leads", "il2_date", "il5_date", "admin_notes"},
+    "poam_candidate": {"responsible_owner", "scheduled_completion_date", "review_status", "admin_notes"},
+    "target_module": {"review_status", "admin_notes", "evidence_url"},
+    "finding": {"review_status", "admin_notes", "disposition"},
+}
+
+
+def _overlay_scope(resource_type: str) -> str:
+    if resource_type == "service_group":
+        return "milestones:write"
+    if resource_type == "poam_candidate":
+        return "poam:write"
+    return "annotations:write"
+
+
+@app.get("/api/v1/admin/overlays", tags=["access control"])
+def admin_overlays(
+    request: Request,
+    resource_type: str | None = None,
+    resource_key: str | None = None,
+    include_history: bool = False,
+) -> dict[str, Any]:
+    _admin_principal(request, "annotations:write")
+    clauses: list[str] = [] if include_history else ["overlay.is_active"]
+    params: list[Any] = []
+    if resource_type:
+        clauses.append("overlay.resource_type = %s")
+        params.append(resource_type)
+    if resource_key:
+        clauses.append("overlay.resource_key = %s")
+        params.append(resource_key)
+    where = " WHERE " + " AND ".join(clauses) if clauses else ""
+    rows = _fetch_all(
+        f"""
+        SELECT overlay.id, overlay.resource_type, overlay.resource_key, overlay.version,
+               overlay.payload, overlay.rationale, overlay.is_active, overlay.created_at,
+               app_user.email AS created_by_email,
+               overlay.created_by_credential_id AS created_by_credential
+        FROM app_auth.admin_overlay overlay
+        LEFT JOIN app_auth.app_user ON app_user.id = overlay.created_by_user_id
+        {where}
+        ORDER BY overlay.created_at DESC
+        LIMIT 500
+        """,
+        tuple(params),
+    )
+    return {"items": rows, "total": len(rows)}
+
+
+@app.post("/api/v1/admin/overlays", tags=["access control"], status_code=201)
+def create_admin_overlay(body: OverlayCreate, request: Request) -> dict[str, Any]:
+    principal = _admin_principal(request, _overlay_scope(body.resource_type))
+    allowed = _OVERLAY_FIELDS.get(body.resource_type)
+    if allowed is None:
+        raise HTTPException(status_code=422, detail="Unsupported overlay resource type")
+    unsupported = sorted(set(body.payload) - allowed)
+    if unsupported:
+        raise HTTPException(status_code=422, detail=f"Unsupported overlay fields: {', '.join(unsupported)}")
+    if not body.payload:
+        raise HTTPException(status_code=422, detail="Overlay payload cannot be empty")
+    user_id, credential_id = _actor_columns(principal)
+    with api_connection() as database:
+        previous = database.execute(
+            """
+            SELECT id, version, payload, rationale, created_at
+            FROM app_auth.admin_overlay
+            WHERE resource_type = %s AND resource_key = %s AND is_active
+            FOR UPDATE
+            """,
+            (body.resource_type, body.resource_key),
+        ).fetchone()
+        version = int(previous["version"]) + 1 if previous else 1
+        if previous:
+            database.execute(
+                "UPDATE app_auth.admin_overlay SET is_active = false WHERE id = %s",
+                (previous["id"],),
+            )
+        row = database.execute(
+            """
+            INSERT INTO app_auth.admin_overlay
+                (resource_type, resource_key, version, payload, rationale,
+                 created_by_user_id, created_by_credential_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id, resource_type, resource_key, version, payload,
+                      rationale, is_active, created_at
+            """,
+            (
+                body.resource_type, body.resource_key, version, Jsonb(body.payload),
+                body.rationale.strip(), user_id, credential_id,
+            ),
+        ).fetchone()
+        _audit_event(
+            database, request, principal, action="overlay.create",
+            resource_type=body.resource_type, resource_key=body.resource_key,
+            before_state=dict(previous) if previous else None,
+            after_state=dict(row or {}),
+        )
+        database.commit()
+    global _cache_revision
+    with _cache_lock:
+        _data_cache.clear()
+        _cache_revision = None
+    return dict(row or {})
+
+
+@app.delete("/api/v1/admin/overlays/{overlay_id}", tags=["access control"])
+def deactivate_admin_overlay(overlay_id: int, request: Request) -> dict[str, Any]:
+    principal = _request_principal(request)
+    with api_connection() as database:
+        before = database.execute(
+            """
+            SELECT id, resource_type, resource_key, version, payload, rationale, is_active
+            FROM app_auth.admin_overlay
+            WHERE id = %s
+            FOR UPDATE
+            """,
+            (overlay_id,),
+        ).fetchone()
+        if before is None:
+            raise HTTPException(status_code=404, detail="Overlay not found")
+        _require_admin(principal, _overlay_scope(str(before["resource_type"])))
+        after = database.execute(
+            """
+            UPDATE app_auth.admin_overlay
+            SET is_active = false
+            WHERE id = %s
+            RETURNING id, resource_type, resource_key, version, payload,
+                      rationale, is_active, created_at
+            """,
+            (overlay_id,),
+        ).fetchone()
+        _audit_event(
+            database, request, principal, action="overlay.deactivate",
+            resource_type=str(before["resource_type"]), resource_key=str(before["resource_key"]),
+            before_state=dict(before), after_state=dict(after or {}),
+        )
+        database.commit()
+    global _cache_revision
+    with _cache_lock:
+        _data_cache.clear()
+        _cache_revision = None
+    return dict(after or {})
+
+
+@app.get("/api/v1/admin/audit", tags=["access control"])
+def admin_audit(request: Request, limit: int = Query(100, ge=1, le=500)) -> dict[str, Any]:
+    _admin_principal(request)
+    rows = _fetch_all(
+        """
+        SELECT audit.id, audit.request_id, audit.action, audit.resource_type,
+               audit.resource_key, audit.before_state, audit.after_state,
+               audit.outcome, audit.occurred_at, app_user.email AS actor_email,
+               audit.actor_credential_id
+        FROM app_auth.audit_event audit
+        LEFT JOIN app_auth.app_user ON app_user.id = audit.actor_user_id
+        ORDER BY audit.occurred_at DESC
+        LIMIT %s
+        """,
+        (limit,),
+    )
+    return {"items": rows, "total": len(rows)}
+
+
 @app.get("/api/v1/stats", tags=["catalog"])
 def catalog_stats() -> dict[str, Any]:
     row = _fetch_one(
@@ -911,6 +1303,7 @@ def _service_group_register_rows(
     assessment: dict[str, Any],
     overview: dict[str, Any],
     milestones: dict[str, Any],
+    service_impacts: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Join catalog, planning, and candidate-assessment rollups by scoped group key."""
     overview_by_key = {
@@ -957,6 +1350,7 @@ def _service_group_register_rows(
             continue
         inventory = overview_by_key.get((collection, group_slug), {})
         profile = profiles.get(group_slug, {})
+        service_impact = (service_impacts or {}).get(service_key, {})
         owners = list(profile.get("owners") or [])
         leads = list(profile.get("leads") or [])
         rows.append(
@@ -972,6 +1366,13 @@ def _service_group_register_rows(
                 "lead_state": "multiple" if len(leads) > 1 else "supplied" if leads else "not_supplied",
                 "il2": _planning_summary(profile, "il2"),
                 "il5": _planning_summary(profile, "il5"),
+                "poam_impact": service_impact.get("poam_impact"),
+                "risk_category": service_impact.get("risk_category"),
+                "comments": service_impact.get("comments"),
+                "service_impact_team": service_impact.get("team"),
+                "service_impact_evidence_grade": service_impact.get("evidence_grade"),
+                "service_impact_review_required": service_impact.get("review_required", False),
+                "service_impact_source": service_impact.get("source"),
                 "source_files": int(rollup.get("source_files") or inventory.get("source_files") or 0),
                 "documents": int(rollup.get("documents") or inventory.get("unique_documents") or 0),
                 "documents_with_fips_evidence": int(rollup.get("documents_with_fips_evidence") or 0),
@@ -1024,6 +1425,9 @@ def _filter_service_group_register(
                 *row["effective_owners"], *row["leads"],
                 *row["poam_candidate_ids"], *row["workstream_ids"],
                 *row.get("portfolio_poam_ids", []),
+                str(row.get("poam_impact") or ""),
+                str(row.get("risk_category") or ""),
+                str(row.get("comments") or ""),
             ]
         ).casefold():
             continue
@@ -1071,8 +1475,33 @@ def service_group_register(
         "dashboard-overview", (None, None), lambda: _build_dashboard_overview(None, None)
     )
     all_rows = _service_group_register_rows(
-        assessment, overview, team_milestones(_active_target_module_contract())
+        assessment,
+        overview,
+        team_milestones(_active_target_module_contract()),
+        _active_service_impact_map(),
     )
+    group_overlays = _active_overlay_map("service_group")
+    for row in all_rows:
+        overlay = group_overlays.get(str(row.get("service_key"))) or group_overlays.get(
+            str(row.get("service_key") or "").rsplit("/", 1)[-1]
+        )
+        if not overlay:
+            continue
+        patch = overlay.get("payload") or {}
+        if "effective_owners" in patch:
+            row["effective_owners"] = list(patch["effective_owners"] or [])
+        if "leads" in patch:
+            row["leads"] = list(patch["leads"] or [])
+        for milestone_key in ("il2", "il5"):
+            date_value = patch.get(f"{milestone_key}_date")
+            if date_value:
+                row[milestone_key] = {
+                    **row[milestone_key],
+                    "state": "dated",
+                    "farthest_date": date_value,
+                    "admin_override": True,
+                }
+        row["admin_overlay"] = overlay
     rows = _filter_service_group_register(
         all_rows, query=query, owner=owner, lead=lead,
         il2_state=il2_state, il5_state=il5_state, action=action,
@@ -1099,7 +1528,7 @@ def service_group_register(
             "owners": sorted({value for row in all_rows for value in row["effective_owners"]}, key=str.casefold),
             "leads": sorted({value for row in all_rows for value in row["leads"]}, key=str.casefold),
         },
-        "disclaimer": "Team Tracker owners and IL2/IL5 values are planning metadata. Findings and POA&M mappings are machine-generated candidates requiring authorized review.",
+        "disclaimer": "Team Tracker owners and IL2/IL5 values and imported service-impact fields are user-asserted planning metadata. Findings and POA&M mappings are machine-generated candidates requiring authorized review.",
     }
     parts = (query, owner, lead, il2_state, il5_state, action, sort, direction, page_size, offset)
     return _conditional_json_response(
@@ -1678,7 +2107,12 @@ def service_group_register_detail(
         lambda: _build_dashboard_overview(source_collection, service_group),
     )
     milestone_contract = team_milestones(_active_target_module_contract())
-    register_rows = _service_group_register_rows(assessment, overview, milestone_contract)
+    register_rows = _service_group_register_rows(
+        assessment,
+        overview,
+        milestone_contract,
+        _active_service_impact_map(),
+    )
     if not register_rows:
         raise HTTPException(status_code=404, detail="Service group not found")
     profile = next(
@@ -2177,9 +2611,18 @@ def _shape_fips_assessment(
     query: str | None,
     poam_limit: int,
     poam_offset: int,
+    candidate_overlays: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     result = {key: value for key, value in assessment.items() if key != "findings"}
-    candidates = list(assessment.get("poam_items", []))
+    candidate_overlays = candidate_overlays or {}
+    candidates = []
+    for source in assessment.get("poam_items", []):
+        item = dict(source)
+        overlay = candidate_overlays.get(str(item.get("poam_candidate_id") or ""))
+        if overlay:
+            item.update(overlay.get("payload") or {})
+            item["admin_overlay"] = overlay
+        candidates.append(item)
     if query:
         normalized = query.casefold()
         candidates = [
@@ -2228,6 +2671,7 @@ def fips_assessment(
         query=query,
         poam_limit=poam_limit,
         poam_offset=poam_offset,
+        candidate_overlays=_active_overlay_map("poam_candidate"),
     )
     parts = (
         source_collection,

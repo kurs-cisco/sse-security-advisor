@@ -23,6 +23,11 @@ The command creates three mode-`0600` files:
 The manifest explicitly says that exact raw source bytes are not included. Keep
 the immutable corpus/object-store versions independently.
 
+The `app_auth` schema is deliberately excluded. Shared bundles never contain
+user identities, API credential digests, administrator overlays, or access
+audit events. After restore, apply migrations and bootstrap administrators in
+the destination environment through its own identity provider.
+
 ## Publication gate
 
 Before sharing:
@@ -65,4 +70,3 @@ record of the post-restore migration versions.
   downloads are accepted.
 - A checksum proves the dump was not changed after export; it does not attest to
   source truth, CMVP validation, or an assessor decision.
-

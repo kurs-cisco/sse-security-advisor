@@ -18,10 +18,14 @@ The public health endpoint is `/healthz`. The login page and local login action
 are the only other unauthenticated application routes. The FastAPI service is a
 separate trust boundary: in cloud mode it must use `CBOM_API_AUTH_MODE=bearer`
 with a random token of at least 32 characters shared only with the Next.js
-server. The API and PostgreSQL must not have public listeners.
+server for browser traffic. A separate host-authenticated ALB rule exposes
+`api.cbom.swg.dev-umbrellagov.com` to FastAPI for application-issued scoped
+credentials. It returns `401` without a credential and never accepts the OIDC
+browser cookie. PostgreSQL has no public listener.
 
 The OIDC discovery configuration in the workspace resolves to an authorization
-code provider supporting `openid` and `groups`. Configure the IdP callback as:
+code provider. The deployed rule requests `openid email groups` so an invited
+email can be bound to the verified issuer and subject. Configure the callback as:
 
 ```text
 https://<cbom-hostname>/oauth2/idpresponse
@@ -66,16 +70,18 @@ informed the isolated ECS design; it is not a statement of current stack state.
 Deployed cloud-dev layout:
 
 ```text
-Route 53 cbom alias -> dedicated HTTPS ALB + OIDC -> ECS Fargate task
-                                                    |- Next.js web
-                                                    |- FastAPI on loopback
-                                                    -> private PostgreSQL 16 RDS
+Route 53 cbom alias ----> HTTPS ALB + OIDC ----> Next.js :3000 --internal bearer--+
+Route 53 api.cbom alias -> HTTPS ALB + API token -> FastAPI :8000 <-------------+
+                                                        |
+                                                        +-> private PostgreSQL 16 RDS
 ```
 
-Only the Next.js container receives traffic from the ALB. FastAPI listens only
-inside the same task and uses a generated bearer token shared through Secrets
-Manager. RDS permits PostgreSQL only from the task and restore-job security
-groups. The deployment uses ECS Fargate rather than EKS and does not modify the
+The ALB reaches Next.js only on port 3000 and FastAPI only on port 8000. The
+browser path uses a generated internal bearer token shared through Secrets
+Manager; the API hostname accepts separately generated, scoped and expiring
+application credentials whose plaintext is never stored. RDS permits PostgreSQL
+only from the task and restore-job security groups. The deployment uses ECS
+Fargate rather than EKS and does not modify the
 NOTA cluster, controller-owned ALB, certificate, database, or DNS record. WAF is
 not part of this approved dev deployment; add it only if the system boundary or
 organizational policy requires it.
@@ -115,7 +121,7 @@ The full procedure is in [DATABASE_SNAPSHOTS.md](DATABASE_SNAPSHOTS.md).
 The `cbom-workbench-dev` CloudFormation stack is deployed in account
 `135124134289`, region `us-gov-east-1`, with termination protection enabled.
 The ECS service is active at desired/running count 1 on an immutable
-`deploy-20260922-3` image tag. The target is healthy, `/healthz` returns 200,
+`deploy-20260922-8` image tag. Both targets are healthy, `/healthz` returns 200,
 and unauthenticated application requests redirect to the configured OIDC
 provider.
 
@@ -126,12 +132,20 @@ component occurrences, and 609 fingerprint records. Raw `COPY` counts printed
 by `pg_restore` are table-row counts and must not be compared directly with
 these deduplicated API metrics.
 
-The application hostname is `https://cbom.swg.dev-umbrellagov.com/`. The IdP
+The September 22 service-impact planning import is checksum-gated at
+`5c481b5941d081b537c8f88805b78820fddfbe8d42af6bc9138d2dedce055ecc`.
+It contributes only POA&M impact, risk category, and comments for 20 team rows
+mapped to 22 service groups. The source remains a private transfer object and is
+not committed to Git; owner, lead, CBOM flags, IL2, and IL5 are not imported.
+
+The application hostname is `https://cbom.swg.dev-umbrellagov.com/`; the scoped
+automation endpoint is `https://api.cbom.swg.dev-umbrellagov.com/`. The IdP
 callback is:
 
 ```text
 https://cbom.swg.dev-umbrellagov.com/oauth2/idpresponse
 ```
 
-The cloud API remains private behind the Next.js proxy and bearer-token
-boundary. Do not disable OIDC or expose the API listener publicly.
+The API hostname fails closed without a valid scoped application credential.
+Do not disable OIDC, disclose credentials, or add a path that bypasses scope
+enforcement. See [ACCESS_CONTROL_AND_OVERLAYS.md](ACCESS_CONTROL_AND_OVERLAYS.md).

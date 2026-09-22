@@ -19,6 +19,18 @@ export type ServiceGroupRegisterRow = {
   lead_state: "multiple" | "supplied" | "not_supplied";
   il2: PlanningSummary;
   il5: PlanningSummary;
+  poam_impact: string | null;
+  risk_category: string | null;
+  comments: string | null;
+  service_impact_team: string | null;
+  service_impact_evidence_grade: "user_asserted" | null;
+  service_impact_review_required: boolean;
+  service_impact_source: {
+    source_filename: string;
+    source_sha256: string;
+    source_row: number;
+    imported_at: string;
+  } | null;
   source_files: number;
   documents: number;
   documents_with_fips_evidence: number;

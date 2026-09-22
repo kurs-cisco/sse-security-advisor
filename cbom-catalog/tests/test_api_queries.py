@@ -6,6 +6,7 @@ import threading
 import unittest
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -19,6 +20,52 @@ except ModuleNotFoundError as exc:
 
 @unittest.skipIf(api is None, "install project dependencies to run API query tests")
 class ApiQueryTests(unittest.TestCase):
+    def test_admin_helper_enforces_token_scope(self) -> None:
+        principal = api.Principal(
+            kind="token",
+            subject="token:test",
+            role="admin",
+            scopes=frozenset({"annotations:write"}),
+            user_id=7,
+            credential_id="00000000-0000-0000-0000-000000000001",
+        )
+
+        self.assertIs(api._require_admin(principal, "annotations:write"), principal)
+        with self.assertRaises(api.HTTPException) as error:
+            api._require_admin(principal, "poam:write")
+        self.assertEqual(error.exception.status_code, 403)
+
+    def test_audit_event_serializes_database_datetimes_for_jsonb(self) -> None:
+        recorded: list[tuple[object, ...]] = []
+
+        class Database:
+            def execute(self, _query: str, params: tuple[object, ...]) -> None:
+                recorded.append(params)
+
+        principal = api.Principal(
+            kind="human",
+            subject="oidc:test",
+            role="admin",
+            scopes=frozenset(),
+            user_id=7,
+            email="admin@example.invalid",
+        )
+        request = SimpleNamespace(state=SimpleNamespace(request_id="request-1"))
+        observed = datetime(2026, 9, 22, 12, 0, tzinfo=UTC)
+
+        with patch.object(api, "Jsonb", side_effect=lambda value: value):
+            api._audit_event(
+                Database(),
+                request,
+                principal,
+                action="test.update",
+                resource_type="test",
+                resource_key="one",
+                after_state={"observed_at": observed},
+            )
+
+        self.assertEqual(recorded[0][-1], {"observed_at": "2026-09-22T12:00:00+00:00"})
+
     def test_distinct_cold_cache_builders_do_not_block_each_other(self) -> None:
         barrier = threading.Barrier(2)
 
@@ -80,6 +127,37 @@ class ApiQueryTests(unittest.TestCase):
         self.assertNotIn("findings", result)
         self.assertEqual(result["poam_page"], {"total": 2, "limit": 1, "offset": 1})
         self.assertEqual(result["poam_items"][0]["poam_candidate_id"], "FIPS3-C")
+
+    def test_fips_response_applies_versioned_overlay_without_mutating_evidence(self) -> None:
+        source = {
+            "poam_items": [
+                {
+                    "poam_candidate_id": "FIPS3-A",
+                    "responsible_owner": "Evidence owner",
+                    "scheduled_completion_date": "2026-10-01",
+                }
+            ]
+        }
+        result = api._shape_fips_assessment(
+            source,
+            include_findings=False,
+            query=None,
+            poam_limit=20,
+            poam_offset=0,
+            candidate_overlays={
+                "FIPS3-A": {
+                    "version": 2,
+                    "payload": {
+                        "responsible_owner": "Reviewed owner",
+                        "scheduled_completion_date": "2026-12-01",
+                    },
+                }
+            },
+        )
+
+        self.assertEqual(source["poam_items"][0]["responsible_owner"], "Evidence owner")
+        self.assertEqual(result["poam_items"][0]["responsible_owner"], "Reviewed owner")
+        self.assertEqual(result["poam_items"][0]["admin_overlay"]["version"], 2)
 
     def test_fips_assessment_keeps_both_queries_inside_the_selected_provenance_scope(self) -> None:
         """FIPS evidence must never be assembled from an unscoped document universe."""
@@ -272,7 +350,19 @@ class ApiQueryTests(unittest.TestCase):
             }],
         }]}
 
-        rows = api._service_group_register_rows(assessment, overview, milestones)
+        service_impacts = {"collection-a/team": {
+            "poam_impact": "Blocker: No Data Available",
+            "risk_category": "Critical",
+            "comments": "Customer-facing service",
+            "team": "Team",
+            "evidence_grade": "user_asserted",
+            "review_required": True,
+            "source": {"source_filename": "service_impact.csv", "source_row": 7},
+        }}
+
+        rows = api._service_group_register_rows(
+            assessment, overview, milestones, service_impacts
+        )
 
         self.assertEqual(len(rows), 1)
         row = rows[0]
@@ -285,6 +375,11 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(row["poam_candidate_ids"], ["FIPS3-ONE"])
         self.assertEqual(row["workstream_ids"], ["FIPSW-ONE"])
         self.assertEqual(row["ingest_issues"], 0)
+        self.assertEqual(row["poam_impact"], "Blocker: No Data Available")
+        self.assertEqual(row["risk_category"], "Critical")
+        self.assertEqual(row["comments"], "Customer-facing service")
+        self.assertEqual(row["service_impact_evidence_grade"], "user_asserted")
+        self.assertTrue(row["service_impact_review_required"])
 
     def test_service_group_register_filters_missing_planning_dates(self) -> None:
         rows = [

@@ -22,6 +22,9 @@
 - [CLOUD_AUTH_AND_DEPLOYMENT.md](CLOUD_AUTH_AND_DEPLOYMENT.md) records the live
   AWS reuse assessment, OIDC trust boundary, and checksummed database
   snapshot/restore workflow.
+- [ACCESS_CONTROL_AND_OVERLAYS.md](ACCESS_CONTROL_AND_OVERLAYS.md) defines OIDC
+  invitation binding, viewer/admin RBAC, scoped API credentials, versioned
+  evidence overlays, audit records, and snapshot exclusions.
 - [WEB_APP.md](WEB_APP.md) documents the workbench information architecture,
   UI/API contracts, accessibility behavior, deployment boundary, and verification.
 - [FIPS_140_3_ASSESSMENT.md](FIPS_140_3_ASSESSMENT.md) explains the deterministic
