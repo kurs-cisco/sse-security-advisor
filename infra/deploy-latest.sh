@@ -82,7 +82,21 @@ cd "${SCRIPT_DIR}"
 npm run build
 npx cdk synth --strict >/dev/null
 npx cdk diff
-npx cdk deploy CbomWorkbenchDev --require-approval never
+npx cdk publish-assets --unstable=publish-assets CbomWorkbenchDev
+aws cloudformation deploy \
+  --region "${REGION}" \
+  --stack-name "${STACK_NAME}" \
+  --template-file cdk.out/CbomWorkbenchDev.template.json \
+  --s3-bucket cdk-hnb659fds-assets-135124134289-us-gov-east-1 \
+  --s3-prefix cbom-workbench-dev/templates \
+  --capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
+  --no-fail-on-empty-changeset \
+  --tags \
+    ApplicationName='CBOM Workbench' \
+    Environment=NONPROD \
+    EnvironmentSubcategory=DEV \
+    DataClassification='Cisco Restricted' \
+    IntendedPublic=False
 
 aws ecs wait services-stable --region "${REGION}" --cluster "${CLUSTER_NAME}" --services "${SERVICE_NAME}"
 
