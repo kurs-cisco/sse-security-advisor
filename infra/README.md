@@ -11,6 +11,19 @@ after ALB OIDC. The dedicated `api.cbom.swg.dev-umbrellagov.com` hostname
 reaches FastAPI through a separate target group and accepts only scoped,
 application-issued bearer credentials.
 
+FastAPI can issue checksum-bound presigned uploads under
+`transfer/ingestion/` and launch the existing one-off Fargate job definition.
+Its task role is limited to that S3 prefix, the specific job task definition,
+cluster, and pass-role targets. The job role remains read-only on `transfer/`.
+Raw corpus objects expire under the temporary-transfer lifecycle and are neither
+proxied through FastAPI nor stored in Git.
+
+The stack applies a narrow S3 CORS rule allowing `PUT` only from the configured
+application hostname with the content-type and checksum headers required by the
+presigned request. The application task may read only the `job/job/*` streams in
+the ingestion log group so Admin can display task output without exposing AWS
+credentials to the browser.
+
 `reuseRetainedBootstrapResources=true` imports the encrypted bucket, ECR
 repositories, generated API token, OIDC placeholder, and log groups retained by
 the initial failed Cloud Map deployment. These resources were created from this
@@ -52,7 +65,9 @@ source/evidence SHA-256 values, including the service-impact spreadsheet,
 uploads them only to the private encrypted CBOM bucket, builds and pushes a new
 immutable amd64 image pair, synthesizes and diffs the CDK stack, deploys the ECS
 change, applies migrations through 013, runs the checksum-gated imports, and
-waits for ECS stability. Run it from an authenticated shell only after approving
+waits for ECS stability. Migration 014 adds private asynchronous-ingestion job
+metadata without putting raw corpus data in PostgreSQL. Run it from an
+authenticated shell only after approving
 those specific data transfers:
 
 ```bash

@@ -24,6 +24,8 @@ ALLOWED_TOKEN_SCOPES = frozenset(
         "poam:write",
         "milestones:write",
         "annotations:write",
+        "ingestion:read",
+        "ingestion:write",
         "users:admin",
         "tokens:admin",
     }
@@ -237,6 +239,8 @@ def require_scope(principal: Principal, scope: str) -> None:
 
 
 def read_scope_for_path(path: str) -> str:
+    if path.startswith("/api/v1/admin/ingestion"):
+        return "ingestion:read"
     if path.startswith("/api/v1/fips/poam") or path.endswith("compliance-package.zip"):
         return "poam:read"
     if path.startswith("/api/v1/fips/"):

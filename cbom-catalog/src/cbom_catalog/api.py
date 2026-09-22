@@ -14,6 +14,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
@@ -43,6 +44,17 @@ from .fips_assessment import (
     render_poam_csv,
     render_portfolio_poam_csv,
     render_workstream_csv,
+)
+from .ingestion_jobs import (
+    IngestionConfigurationError,
+    IngestionManifestError,
+    IngestionStateError,
+    create_ingestion_batch,
+    get_ingestion_batch,
+    get_ingestion_batch_logs,
+    list_ingestion_batches,
+    normalize_manifest,
+    submit_ingestion_batch,
 )
 from .service_impact import load_active_service_impacts
 from .target_modules import load_active_target_modules
@@ -97,7 +109,7 @@ class UserAccessUpdate(BaseModel):
 
 class ApiCredentialCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
-    scopes: list[str] = Field(min_length=1, max_length=8)
+    scopes: list[str] = Field(min_length=1, max_length=10)
     expires_in_days: int = Field(default=30, ge=1, le=90)
 
 
@@ -106,6 +118,25 @@ class OverlayCreate(BaseModel):
     resource_key: str = Field(min_length=1, max_length=240)
     payload: dict[str, Any]
     rationale: str = Field(min_length=8, max_length=2_000)
+
+
+class IngestionManifestFile(BaseModel):
+    path: str = Field(min_length=1, max_length=1_024)
+    sha256: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
+    size_bytes: int = Field(ge=0, le=5 * 1024 * 1024 * 1024)
+    modified_at: str | None = None
+
+
+class IngestionBatchCreate(BaseModel):
+    source_collection: str = Field(min_length=1, max_length=80)
+    dry_run: bool = False
+    authoritative_snapshot: bool = False
+    manifest_sha256: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
+    files: list[IngestionManifestFile] = Field(min_length=1, max_length=5_000)
+
+
+class IngestionBatchSubmit(BaseModel):
+    manifest_sha256: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
 
 
 def _production_mode() -> bool:
@@ -1004,6 +1035,113 @@ def admin_audit(request: Request, limit: int = Query(100, ge=1, le=500)) -> dict
         (limit,),
     )
     return {"items": rows, "total": len(rows)}
+
+
+@app.get("/api/v1/admin/ingestion/batches", tags=["admin ingestion"])
+def admin_ingestion_batches(
+    request: Request,
+    limit: int = Query(50, ge=1, le=200),
+) -> dict[str, Any]:
+    _admin_principal(request, "ingestion:read")
+    rows = list_ingestion_batches(limit=limit)
+    return {"items": rows, "total": len(rows)}
+
+
+@app.get("/api/v1/admin/ingestion/batches/{batch_id}", tags=["admin ingestion"])
+def admin_ingestion_batch(batch_id: str, request: Request) -> dict[str, Any]:
+    _admin_principal(request, "ingestion:read")
+    try:
+        uuid.UUID(batch_id)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="Invalid ingestion batch ID") from error
+    row = get_ingestion_batch(batch_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Ingestion batch not found")
+    return row
+
+
+@app.get("/api/v1/admin/ingestion/batches/{batch_id}/logs", tags=["admin ingestion"])
+def admin_ingestion_batch_logs(
+    batch_id: str,
+    request: Request,
+    limit: int = Query(200, ge=1, le=1_000),
+) -> dict[str, Any]:
+    _admin_principal(request, "ingestion:read")
+    try:
+        uuid.UUID(batch_id)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="Invalid ingestion batch ID") from error
+    try:
+        result = get_ingestion_batch_logs(batch_id, limit=limit)
+    except (BotoCoreError, ClientError) as error:
+        LOGGER.exception("Unable to read ingestion task logs")
+        raise HTTPException(status_code=503, detail="Ingestion task logs are unavailable") from error
+    if result is None:
+        raise HTTPException(status_code=404, detail="Ingestion batch not found")
+    return result
+
+
+@app.post("/api/v1/admin/ingestion/batches", tags=["admin ingestion"], status_code=201)
+def create_admin_ingestion_batch(
+    body: IngestionBatchCreate,
+    request: Request,
+) -> dict[str, Any]:
+    principal = _admin_principal(request, "ingestion:write")
+    user_id, credential_id = _actor_columns(principal)
+    try:
+        manifest = normalize_manifest(
+            source_collection=body.source_collection,
+            dry_run=body.dry_run,
+            authoritative_snapshot=body.authoritative_snapshot,
+            files=[item.model_dump() for item in body.files],
+        )
+        return create_ingestion_batch(
+            manifest=manifest,
+            supplied_manifest_sha256=body.manifest_sha256,
+            request_id=request.state.request_id,
+            actor_user_id=user_id,
+            actor_credential_id=credential_id,
+        )
+    except IngestionManifestError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except IngestionConfigurationError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except (BotoCoreError, ClientError) as error:
+        LOGGER.exception("Unable to create presigned ingestion uploads")
+        raise HTTPException(status_code=503, detail="S3 upload signing is unavailable") from error
+
+
+@app.post("/api/v1/admin/ingestion/batches/{batch_id}/submit", tags=["admin ingestion"])
+def submit_admin_ingestion_batch(
+    batch_id: str,
+    body: IngestionBatchSubmit,
+    request: Request,
+) -> dict[str, Any]:
+    principal = _admin_principal(request, "ingestion:write")
+    try:
+        uuid.UUID(batch_id)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="Invalid ingestion batch ID") from error
+    user_id, credential_id = _actor_columns(principal)
+    try:
+        return submit_ingestion_batch(
+            batch_id=batch_id,
+            supplied_manifest_sha256=body.manifest_sha256,
+            request_id=request.state.request_id,
+            actor_user_id=user_id,
+            actor_credential_id=credential_id,
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Ingestion batch not found") from error
+    except IngestionManifestError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except IngestionStateError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except IngestionConfigurationError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except (BotoCoreError, ClientError) as error:
+        LOGGER.exception("Unable to start ingestion task")
+        raise HTTPException(status_code=503, detail="ECS ingestion launch is unavailable") from error
 
 
 @app.get("/api/v1/stats", tags=["catalog"])

@@ -87,6 +87,61 @@ docker compose --profile tools run --rm ingest \
   --collection sse-cboms --force-reprocess
 ```
 
+### Asynchronous cloud ingestion API
+
+Cloud corpus uploads use the administrator API; raw files never pass through
+FastAPI. Create a manifest containing the stable source collection and, for
+each `.json` or `.csv` file, its normalized relative path, byte size, SHA-256,
+and optional timezone-qualified modification time. Canonicalize the manifest
+with `cbom_catalog.ingestion_jobs.normalize_manifest`, then hash the canonical
+JSON with `manifest_sha256`.
+
+1. `POST /api/v1/admin/ingestion/batches` with the manifest and its checksum.
+   The API validates paths, limits, modes, and checksum, persists operational
+   metadata, and returns checksum-bound presigned S3 `PUT` URLs.
+2. Upload every file directly to its URL with the returned content type,
+   content length, and `x-amz-checksum-sha256` headers. S3 validates the upload.
+3. `POST /api/v1/admin/ingestion/batches/{id}/submit` with the same manifest
+   checksum. The API launches a one-off ECS/Fargate task and returns immediately.
+4. Poll `GET /api/v1/admin/ingestion/batches/{id}`. The worker downloads to
+   ephemeral storage, recomputes every byte-level SHA-256, builds an inventory,
+   and only then invokes the existing checksum-gated ingester.
+5. Read the selected task's newest CloudWatch events from
+   `GET /api/v1/admin/ingestion/batches/{id}/logs`. The API resolves the log
+   stream from the batch's recorded ECS task ARN; browsers receive no AWS
+   credentials.
+
+The administrator page implements this protocol end to end. Choose the corpus
+folder, confirm the stable source collection, leave **Dry run** selected for a
+non-mutating comparison, and start the batch. Browser-side hashing and direct
+S3 upload progress are shown first; the job history then polls validation and
+ingestion state. Selecting a job displays checksum progress, timestamps,
+CloudWatch task output, inventory totals, comparison counts and sample paths,
+or the committed ingest result. Local click-through authentication may inspect
+history but cannot launch a cloud task because it is not a provisioned audit
+identity.
+
+Use an administrator credential with `ingestion:write` to create and submit a
+batch and `ingestion:read` to inspect status. Uploaded objects live below the
+private `transfer/ingestion/` prefix and inherit its temporary-object lifecycle.
+
+For a non-mutating end-to-end verification, use `dry_run=true`. It validates
+all uploads, parses the corpus inventory, and compares `(source collection,
+relative path, SHA-256)` against current `source_file` rows. It does not invoke
+`ingest_root` or modify normalized catalog/evidence tables; only private
+`app_auth` job/audit records change. Non-dry-run jobs store no raw JSON in
+PostgreSQL and use the S3 URI as source provenance.
+
+The supplied client performs the protocol without printing the API token or
+presigned URLs:
+
+```bash
+cd cbom-catalog
+CBOM_ADMIN_API_TOKEN='set-outside-shell-history' \
+  PYTHONPATH=src python scripts/submit_ingestion_batch.py \
+  ../OneDrive_1_9-18-2026 --collection sse-cboms --dry-run
+```
+
 Do not use `--authoritative-snapshot` for a partial download. Do not reuse a
 collection name for an unrelated corpus. When normalization semantics change,
 rebuild into a separate database and compare before promotion.

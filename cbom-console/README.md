@@ -19,8 +19,9 @@ API directly. The proxy can attach an internal bearer token at runtime.
 - **POA&M** — draft FIPS 140-3 candidate register, Team Tracker owner/lead and
   IL2/IL5 planning data, expandable evidence/remediation details, asset and
   workstream CSV exports, and a compliance ZIP.
-- **Admin** — visible only to application administrators; manages viewer/admin
-  access, one-time scoped API credentials, and audited versioned overlays.
+- **Admin** — visible only to application administrators; starts checksum-gated
+  direct-to-S3 corpus ingestion, tracks ECS job status/logs/results, manages
+  viewer/admin access, and issues one-time scoped API credentials.
 
 Light and dark themes share the same semantic color tokens and the selected
 theme is retained in local browser storage. Tables remain horizontally scrollable

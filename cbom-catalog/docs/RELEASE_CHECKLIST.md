@@ -49,6 +49,12 @@ assessment paging, issues, and all three exports.
 - [ ] Generate a short-lived scoped credential in Admin, exercise one permitted
       read and one temporary overlay create/deactivate through the API hostname,
       then revoke it and confirm subsequent access returns `401`.
+- [ ] Create a dry-run ingestion batch through the public API, upload directly
+      to its presigned S3 URLs, and confirm the ECS task reaches `succeeded`, all
+      checksums verify, and the catalog comparison reports no unexpected delta.
+- [ ] Repeat the dry-run from Admin: folder discovery and browser checksumming
+      complete, direct S3 upload succeeds without CORS errors, job state polls,
+      and the selected job shows CloudWatch logs and the same comparison result.
 - [ ] Primary navigation stays fixed on desktop and the bottom navigation works
       on a narrow viewport. Check keyboard focus, escape-to-close, 200% zoom,
       and reduced motion.

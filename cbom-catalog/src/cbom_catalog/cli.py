@@ -86,6 +86,16 @@ def main() -> None:
         help="Source collection whose service groups inherit the team planning rows",
     )
 
+    ingestion_batch_parser = subparsers.add_parser(
+        "run-ingestion-batch",
+        help="Validate and execute one previously submitted S3 ingestion batch",
+    )
+    ingestion_batch_parser.add_argument("batch_id")
+    ingestion_batch_parser.add_argument(
+        "--database-url",
+        default=os.environ.get("DATABASE_URL"),
+    )
+
     args = parser.parse_args()
     if args.command == "inventory":
         result = build_inventory(args.root, limit=args.limit)
@@ -143,6 +153,12 @@ def main() -> None:
                 indent=2,
             )
         )
+        return
+    if args.command == "run-ingestion-batch":
+        from .ingestion_jobs import execute_ingestion_batch, stats_as_json
+
+        result = execute_ingestion_batch(args.batch_id, database_url=args.database_url)
+        print(stats_as_json(result))
 
 
 def _env_bool(name: str, default: bool) -> bool:

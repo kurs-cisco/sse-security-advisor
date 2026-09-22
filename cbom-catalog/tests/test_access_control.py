@@ -48,6 +48,7 @@ def test_token_scope_is_enforced_and_paths_map_to_least_privilege() -> None:
     assert error.value.status_code == 403
     assert read_scope_for_path("/api/v1/fips/assessment") == "assessment:read"
     assert read_scope_for_path("/api/v1/fips/poam.csv") == "poam:read"
+    assert read_scope_for_path("/api/v1/admin/ingestion/batches") == "ingestion:read"
 
 
 def test_token_expiration_is_bounded() -> None:

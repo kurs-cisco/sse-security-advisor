@@ -30,6 +30,11 @@ pepper is generated and retained in AWS Secrets Manager. Credentials are bound
 to an active administrator, expire in at most 90 days, can be revoked, and use
 least-privilege scopes.
 
+Administrative ingestion adds two scopes. `ingestion:read` lists batches and
+reports status; `ingestion:write` creates checksum manifests, issues private
+presigned uploads, and submits ECS jobs. Both require a credential owned by an
+active administrator. The internal viewer/service bearer cannot invoke them.
+
 Example read:
 
 ```bash
@@ -52,6 +57,11 @@ Supported overlays cover service-group ownership and IL2/IL5 dates, POA&M
 candidate ownership and mitigation date, and reviewed annotations. They do not
 turn candidate findings into assessor conclusions, prove CMVP validation, or
 authorize POA&M closure.
+
+The administrator page does not expose a standalone overlay editor. Overlay
+editing can be added later as contextual inline actions on the relevant tables
+and entity detail views; until then, the authenticated API remains the only
+overlay-writing surface.
 
 Shareable database snapshots explicitly exclude `app_auth`; they therefore do
 not distribute identities, credential digests, overlays, or access audit data.

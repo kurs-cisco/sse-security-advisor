@@ -1,6 +1,7 @@
 import * as cdk from "aws-cdk-lib";
 import * as acm from "aws-cdk-lib/aws-certificatemanager";
 import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
+import * as cr from "aws-cdk-lib/custom-resources";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as ecs from "aws-cdk-lib/aws-ecs";
@@ -117,6 +118,35 @@ export class CbomWorkbenchStack extends cdk.Stack {
             noncurrentVersionExpiration: cdk.Duration.days(14),
           }],
         });
+
+    const ingestionCorsCall: cr.AwsSdkCall = {
+      service: "S3",
+      action: "putBucketCors",
+      parameters: {
+        Bucket: dataBucket.bucketName,
+        CORSConfiguration: {
+          CORSRules: [{
+            AllowedHeaders: ["content-type", "x-amz-checksum-sha256"],
+            AllowedMethods: ["PUT"],
+            AllowedOrigins: [`https://${hostname}`],
+            ExposeHeaders: ["ETag", "x-amz-checksum-sha256"],
+            MaxAgeSeconds: 3600,
+          }],
+        },
+      },
+      physicalResourceId: cr.PhysicalResourceId.of(`${dataBucketName}-ingestion-cors-${hostname}`),
+    };
+    new cr.AwsCustomResource(this, "IngestionUploadCors", {
+      onCreate: ingestionCorsCall,
+      onUpdate: ingestionCorsCall,
+      installLatestAwsSdk: false,
+      policy: cr.AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          actions: ["s3:PutBucketCORS"],
+          resources: [dataBucket.bucketArn],
+        }),
+      ]),
+    });
 
     const oidcSecret: secretsmanager.ISecret = reuseRetainedBootstrapResources
       ? secretsmanager.Secret.fromSecretCompleteArn(
@@ -259,7 +289,11 @@ export class CbomWorkbenchStack extends cdk.Stack {
     });
     const apiContainer = webTask.addContainer("api", {
       image: ecs.ContainerImage.fromEcrRepository(catalogRepository, imageTag),
-      logging: ecs.LogDrivers.awsLogs({ streamPrefix: "api", logGroup: apiLogGroup }),
+      logging: ecs.LogDrivers.awsLogs({
+        streamPrefix: "api",
+        logGroup: apiLogGroup,
+        mode: ecs.AwsLogDriverMode.BLOCKING,
+      }),
       environment: {
         PGHOST: database.instanceEndpoint.hostname,
         PGPORT: database.instanceEndpoint.port.toString(),
@@ -414,7 +448,11 @@ export class CbomWorkbenchStack extends cdk.Stack {
     const oidcClientId = requiredContext(this, "oidcClientId");
     const webContainer = webTask.addContainer("web", {
       image: ecs.ContainerImage.fromEcrRepository(webRepository, imageTag),
-      logging: ecs.LogDrivers.awsLogs({ streamPrefix: "web", logGroup: webLogGroup }),
+      logging: ecs.LogDrivers.awsLogs({
+        streamPrefix: "web",
+        logGroup: webLogGroup,
+        mode: ecs.AwsLogDriverMode.BLOCKING,
+      }),
       environment: {
         CBOM_API_ORIGIN: "http://127.0.0.1:8000",
         CBOM_AUTH_MODE: "alb-oidc",
@@ -473,23 +511,73 @@ export class CbomWorkbenchStack extends cdk.Stack {
       },
     });
     jobTask.addToTaskRolePolicy(new iam.PolicyStatement({
-      actions: ["s3:GetObject", "s3:GetObjectVersion", "s3:ListBucket"],
-      resources: [dataBucket.bucketArn, dataBucket.arnForObjects("*")],
+      actions: ["s3:ListBucket"],
+      resources: [dataBucket.bucketArn],
+      conditions: { StringLike: { "s3:prefix": ["transfer/*"] } },
+    }));
+    jobTask.addToTaskRolePolicy(new iam.PolicyStatement({
+      actions: ["s3:GetObject", "s3:GetObjectVersion"],
+      resources: [dataBucket.arnForObjects("transfer/*")],
     }));
     jobTask.addContainer("job", {
       image: ecs.ContainerImage.fromEcrRepository(catalogRepository, imageTag),
-      logging: ecs.LogDrivers.awsLogs({ streamPrefix: "job", logGroup: jobLogGroup }),
+      logging: ecs.LogDrivers.awsLogs({
+        streamPrefix: "job",
+        logGroup: jobLogGroup,
+        mode: ecs.AwsLogDriverMode.BLOCKING,
+      }),
       environment: {
         PGHOST: database.instanceEndpoint.hostname,
         PGPORT: database.instanceEndpoint.port.toString(),
         PGDATABASE: "cbom_catalog",
         CBOM_SNAPSHOT_BUCKET: dataBucket.bucketName,
+        CBOM_INGEST_BUCKET: dataBucket.bucketName,
       },
       secrets: {
         PGUSER: ecs.Secret.fromSecretsManager(databaseSecret, "username"),
         PGPASSWORD: ecs.Secret.fromSecretsManager(databaseSecret, "password"),
       },
     });
+
+    apiContainer.addEnvironment("CBOM_INGEST_BUCKET", dataBucket.bucketName);
+    apiContainer.addEnvironment("CBOM_INGEST_ECS_CLUSTER", cluster.clusterArn);
+    apiContainer.addEnvironment("CBOM_INGEST_TASK_DEFINITION", jobTask.taskDefinitionArn);
+    apiContainer.addEnvironment("CBOM_INGEST_SUBNET_IDS", privateSubnetIds.join(","));
+    apiContainer.addEnvironment(
+      "CBOM_INGEST_SECURITY_GROUP_IDS",
+      jobSecurityGroup.securityGroupId,
+    );
+    apiContainer.addEnvironment("CBOM_INGEST_CONTAINER_NAME", "job");
+    apiContainer.addEnvironment("CBOM_INGEST_LOG_GROUP", jobLogGroup.logGroupName);
+    apiContainer.addEnvironment("CBOM_INGEST_LOG_STREAM_PREFIX", "job");
+    apiContainer.addEnvironment("CBOM_INGEST_URL_TTL_SECONDS", "3600");
+    apiContainer.addEnvironment("CBOM_INGEST_MAX_ACTIVE_JOBS", "3");
+    webTask.addToTaskRolePolicy(new iam.PolicyStatement({
+      actions: ["s3:PutObject"],
+      resources: [dataBucket.arnForObjects("transfer/ingestion/*")],
+    }));
+    const ingestionJobLogStreamArn = cdk.Arn.format({
+      service: "logs",
+      resource: "log-group",
+      resourceName: `${jobLogGroup.logGroupName}:log-stream:job/job/*`,
+      arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
+    }, this);
+    webTask.addToTaskRolePolicy(new iam.PolicyStatement({
+      actions: ["logs:GetLogEvents"],
+      resources: [ingestionJobLogStreamArn],
+    }));
+    webTask.addToTaskRolePolicy(new iam.PolicyStatement({
+      actions: ["ecs:RunTask"],
+      resources: [jobTask.taskDefinitionArn],
+      conditions: { ArnEquals: { "ecs:cluster": cluster.clusterArn } },
+    }));
+    const jobRoleArns = [jobTask.taskRole.roleArn];
+    if (jobTask.executionRole) jobRoleArns.push(jobTask.executionRole.roleArn);
+    webTask.addToTaskRolePolicy(new iam.PolicyStatement({
+      actions: ["iam:PassRole"],
+      resources: jobRoleArns,
+      conditions: { StringEquals: { "iam:PassedToService": "ecs-tasks.amazonaws.com" } },
+    }));
 
     if (enableOidc) {
       const oidcIssuer = requiredContext(this, "oidcIssuer");

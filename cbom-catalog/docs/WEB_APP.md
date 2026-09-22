@@ -84,11 +84,15 @@ is blocked in production unless an explicit insecure override is set. Cloud mode
 verifies the ALB-signed OIDC token and requires a separate bearer-token trust
 boundary between Next.js and FastAPI. Raw document APIs are disabled by default.
 
-Imported evidence remains read-only. Administrators can manage application
-access and add audited, versioned overlays without changing source records or
-checksums. Ingestion, source deletion, and raw-source distribution remain
-operator workflows. See [ACCESS_CONTROL_AND_OVERLAYS.md](ACCESS_CONTROL_AND_OVERLAYS.md)
-and [OPERATIONS.md](OPERATIONS.md).
+Imported evidence remains read-only. The administrator page provides the
+checksum-gated asynchronous ingestion workflow plus user management and scoped
+API credentials. Corpus bytes upload directly to temporary private S3 objects;
+FastAPI receives only manifest metadata and job control requests. The audited
+overlay API and data model remain available for future inline editing on the
+affected tables and entities; there is no standalone overlay editor. Source
+deletion and raw-source distribution remain operator workflows. See
+[ACCESS_CONTROL_AND_OVERLAYS.md](ACCESS_CONTROL_AND_OVERLAYS.md) and
+[OPERATIONS.md](OPERATIONS.md).
 
 ## Verification
 

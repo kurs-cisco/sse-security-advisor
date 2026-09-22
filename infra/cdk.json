@@ -33,7 +33,7 @@
       "us-gov-east-1b",
       "us-gov-east-1c"
     ],
-    "imageTag": "deploy-20260922-8",
+    "imageTag": "deploy-20260923-11",
     "oidcClientId": "DIIYIKV2YSWCYEYECY3L",
     "oidcIssuer": "https://sso-345c0691.sso.duosecurity.com/oidc/DIIYIKV2YSWCYEYECY3L",
     "oidcAuthorizationEndpoint": "https://sso-345c0691.sso.duosecurity.com/oidc/DIIYIKV2YSWCYEYECY3L/authorize",
