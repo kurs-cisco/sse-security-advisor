@@ -9,9 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import date, datetime
+from datetime import datetime
 from typing import Any
-
 
 TRACKER_SOURCE = {
     "source": "FIPS 140-3 Engineering Milestone Tracker attached Confluence export",
@@ -144,7 +143,6 @@ def _tracker_row(row_key: str) -> dict[str, Any]:
 # A catalog group can map to multiple source rows only where the user asked for
 # a merge.  The order is retained for provenance/display.
 GROUP_TEAM_KEYS: dict[str, tuple[str, ...]] = {
-    "apix": ("APIX",),
     "apix-no-cbom": ("APIX",),
     "sfcn-ravpn": ("SFCN-RAVPN",),
     "zta-bap": ("ZTA-BAP",),
@@ -291,8 +289,69 @@ def _delivery_wave(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _profile(group_slug: str) -> dict[str, Any]:
+def _target_rows(group_data: dict[str, Any]) -> list[dict[str, Any]]:
+    modules_by_team: dict[str, list[dict[str, Any]]] = {}
+    for module in group_data.get("modules", []):
+        modules_by_team.setdefault(str(module.get("team_key") or ""), []).append(module)
+    rows: list[dict[str, Any]] = []
+    for team in group_data.get("teams", []):
+        modules = modules_by_team.get(str(team.get("team_key") or ""), [])
+        summaries = []
+        for module in modules:
+            current = module.get("current_module") or "Module not supplied"
+            target = module.get("target_module") or "target not supplied"
+            disposition = module.get("target_disposition") or "not_determined"
+            summaries.append(f"{current} -> {target} [{disposition}]")
+        rows.append(
+            {
+                "team": team.get("team"),
+                "owner": team.get("owner"),
+                "lead": team.get("lead"),
+                "il2": _milestone(str(team.get("il2_raw") or ""), "IL2"),
+                "il5": _milestone(str(team.get("il5_raw") or ""), "IL5"),
+                "cmvp_mapping": "; ".join(summaries) or None,
+                "cmvp_disposition": {
+                    "status": "mixed_target_module_inventory",
+                    "raw_value": "; ".join(summaries),
+                    "evidence_grade": "user_asserted",
+                    "review_required": True,
+                },
+                "source_teams": [team.get("team")],
+                "source_rows": [],
+                "target_modules": modules,
+            }
+        )
+    return rows
+
+
+def _profile(
+    group_slug: str,
+    target_module_contract: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     canonical_group = _slug(group_slug)
+    target_group = (target_module_contract or {}).get("groups", {}).get(canonical_group)
+    if target_group:
+        rows = _target_rows(target_group)
+        owners = list(dict.fromkeys(row["owner"] for row in rows if row.get("owner")))
+        leads = list(dict.fromkeys(row["lead"] for row in rows if row.get("lead")))
+        delivery_rows = [
+            {
+                "il2": str(team.get("il2_raw") or ""),
+                "il5": str(team.get("il5_raw") or ""),
+            }
+            for team in target_group.get("teams", [])
+        ]
+        return {
+            "service_group": canonical_group,
+            "mapping_status": "mapped",
+            "empty_service_category": False,
+            "owners": owners,
+            "leads": leads,
+            "delivery_wave": _delivery_wave(delivery_rows),
+            "tracker_rows": rows,
+            "target_modules": target_group.get("modules", []),
+            "planning_source": (target_module_contract or {}).get("source"),
+        }
     row_keys = GROUP_TEAM_KEYS.get(canonical_group, ())
     rows = [_tracker_row(key) for key in row_keys]
     owners = list(dict.fromkeys(row["owner"] for row in rows if row["owner"]))
@@ -304,6 +363,8 @@ def _profile(group_slug: str) -> dict[str, Any]:
         "owners": owners,
         "leads": leads,
         "delivery_wave": _delivery_wave(rows),
+        "target_modules": [],
+        "planning_source": TRACKER_SOURCE,
         "tracker_rows": [
             {
                 "team": row["team"],
@@ -321,9 +382,52 @@ def _profile(group_slug: str) -> dict[str, Any]:
     }
 
 
-def team_milestones() -> dict[str, Any]:
+def team_milestones(
+    target_module_contract: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Return a stable, provenance-bearing group milestone contract."""
-    groups = [_profile(group) for group in sorted(GROUP_TEAM_KEYS)]
+    groups = [
+        _profile(group, target_module_contract)
+        for group in sorted(GROUP_TEAM_KEYS)
+    ]
+    if target_module_contract:
+        all_tracker_rows_by_team: dict[str, dict[str, Any]] = {}
+        mapped_groups_by_team: dict[str, set[str]] = {}
+        for profile in groups:
+            for row in profile["tracker_rows"]:
+                team_name = str(row.get("team") or "")
+                all_tracker_rows_by_team[team_name] = {
+                    **row,
+                    "delivery_wave": profile["delivery_wave"],
+                    "mapping_status": "mapped",
+                }
+                mapped_groups_by_team.setdefault(team_name, set()).add(
+                    profile["service_group"]
+                )
+        all_tracker_rows = [
+            {
+                **row,
+                "mapped_service_groups": sorted(mapped_groups_by_team[team_name]),
+            }
+            for team_name, row in sorted(
+                all_tracker_rows_by_team.items(), key=lambda item: item[0].casefold()
+            )
+        ]
+        material = repr((groups, all_tracker_rows)).encode("utf-8")
+        return {
+            "source": {
+                **target_module_contract["source"],
+                "source": "Imported team target-module inventory",
+                "payload_sha256": hashlib.sha256(material).hexdigest(),
+                "prior_tracker_source": TRACKER_SOURCE,
+            },
+            "disclaimer": (
+                "Imported team module/status data is user-asserted planning metadata; "
+                "it is not proof of validation, deployment match, or an assessor conclusion."
+            ),
+            "groups": groups,
+            "all_tracker_rows": all_tracker_rows,
+        }
     mapped_groups_by_row: dict[str, list[str]] = {}
     for group, row_keys in GROUP_TEAM_KEYS.items():
         for row_key in row_keys:
@@ -359,7 +463,10 @@ def team_milestones() -> dict[str, Any]:
     }
 
 
-def enrich_poam_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def enrich_poam_items(
+    items: list[dict[str, Any]],
+    target_module_contract: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Attach group planning context to draft POA&M candidates.
 
     Only explicit full IL2 dates may populate scheduled_completion_date. When a
@@ -369,13 +476,13 @@ def enrich_poam_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for item in items:
         group_references = item.get("affected_service_groups") or item.get("affected_services", [])
         groups = sorted({_slug(str(service).rsplit("/", 1)[-1]) for service in group_references})
-        profiles = [_profile(group) for group in groups]
+        profiles = [_profile(group, target_module_contract) for group in groups]
         profiles_by_group = {profile["service_group"]: profile for profile in profiles}
         il2_rows = [row["il2"] for profile in profiles for row in profile["tracker_rows"]]
         explicit_dates = sorted({row["date"] for row in il2_rows if row["status"] == "date" and row["date"]})
         owners = list(dict.fromkeys(owner for profile in profiles for owner in profile["owners"]))
         item["team_tracker_milestones"] = {
-            "source": team_milestones()["source"],
+            "source": team_milestones(target_module_contract)["source"],
             "group_milestones": profiles,
             "il2_mitigation_date_rule": "farthest explicit parseable IL2 date across affected service groups",
             "il2_explicit_dates": explicit_dates,
@@ -392,6 +499,8 @@ def enrich_poam_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "leads": profile["leads"],
                 "delivery_wave": profile["delivery_wave"],
                 "tracker_rows": profile["tracker_rows"],
+                "target_modules": profile.get("target_modules", []),
+                "planning_source": profile.get("planning_source"),
                 "eta_inheritance": "Inherited from the mapped service-group Team Tracker row",
             }
         item["milestone_deliverables"] = [
@@ -401,6 +510,8 @@ def enrich_poam_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "leads": profile["leads"],
                 "delivery_wave": profile["delivery_wave"],
                 "tracker_rows": profile["tracker_rows"],
+                "target_modules": profile.get("target_modules", []),
+                "planning_source": profile.get("planning_source"),
             }
             for profile in profiles
         ]
@@ -424,11 +535,14 @@ def enrich_poam_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return items
 
 
-def portfolio_delivery_waves(group_slugs: list[str] | None = None) -> list[dict[str, Any]]:
+def portfolio_delivery_waves(
+    group_slugs: list[str] | None = None,
+    target_module_contract: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Return group-level IL2 commitments in the requested Oct/Dec/Mar waves."""
     selected_values = list(GROUP_TEAM_KEYS) if group_slugs is None else group_slugs
     selected = sorted({_slug(value) for value in selected_values})
-    profiles = [_profile(group) for group in selected]
+    profiles = [_profile(group, target_module_contract) for group in selected]
     wave_order = ("october_2026", "december_2026", "march_2027", "uncommitted")
     result: list[dict[str, Any]] = []
     for wave in wave_order:
@@ -464,6 +578,11 @@ def portfolio_delivery_waves(group_slugs: list[str] | None = None) -> list[dict[
                         "raw_il2_values": profile["delivery_wave"]["raw_il2_values"],
                         "cmvp_dispositions": sorted(
                             {
+                                module.get("target_disposition") or "not_determined"
+                                for module in profile.get("target_modules", [])
+                            }
+                        ) or sorted(
+                            {
                                 row["cmvp_disposition"]["status"]
                                 for row in profile["tracker_rows"]
                             }
@@ -477,7 +596,10 @@ def portfolio_delivery_waves(group_slugs: list[str] | None = None) -> list[dict[
     return result
 
 
-def build_portfolio_poam_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_portfolio_poam_items(
+    items: list[dict[str, Any]],
+    target_module_contract: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Build exactly two requested portfolio candidates without hiding asset evidence."""
     specifications = (
         {
@@ -486,7 +608,7 @@ def build_portfolio_poam_items(items: list[dict[str, Any]]) -> list[dict[str, An
             "match_status": "active_certificate",
             "title": "Migrate deployments to deployment-matched FIPS 140-3 modules with active certificates",
             "condition": (
-                "Team Tracker planning data identifies an active certificate or named active FIPS 140-3 "
+                "Team target-module planning data identifies an active certificate or named FIPS 140-3 "
                 "module, while deployment-to-certificate correlation and approved-mode evidence still require review."
             ),
         },
@@ -496,7 +618,7 @@ def build_portfolio_poam_items(items: list[dict[str, Any]]) -> list[dict[str, An
             "match_status": "cmvp_in_process",
             "title": "Track migrations dependent on modules in CMVP In-Test or In-Progress",
             "condition": (
-                "Team Tracker planning data identifies a target module as testing, In-Test, or In-Progress; "
+                "Team target-module planning data identifies a module as pending certification, In-Test, or In-Progress; "
                 "no active validation conclusion is inferred."
             ),
         },
@@ -505,19 +627,103 @@ def build_portfolio_poam_items(items: list[dict[str, Any]]) -> list[dict[str, An
     all_linked_candidate_ids: set[str] = set()
     for specification in specifications:
         candidate_ids: set[str] = set()
-        matched_links: list[dict[str, Any]] = []
+        matched_links_by_record: dict[tuple[Any, ...], dict[str, Any]] = {}
         for item in items:
             for link in item.get("service_scope_links", []):
                 planning = link.get("planning") or {}
-                statuses = {
-                    row.get("cmvp_disposition", {}).get("status")
-                    for row in planning.get("tracker_rows", [])
-                }
+                target_modules = planning.get("target_modules", [])
+                statuses = (
+                    {
+                        row.get("target_disposition")
+                        for row in target_modules
+                    }
+                    if target_modules
+                    else {
+                        row.get("cmvp_disposition", {}).get("status")
+                        for row in planning.get("tracker_rows", [])
+                    }
+                )
                 if specification["match_status"] not in statuses:
                     continue
-                matched_links.append(link)
-                if item.get("poam_candidate_id"):
-                    candidate_ids.add(str(item["poam_candidate_id"]))
+                candidate_id = str(item.get("poam_candidate_id") or "")
+                if candidate_id:
+                    candidate_ids.add(candidate_id)
+                record_key = (
+                    link.get("document_id"),
+                    link.get("service_group_ref"),
+                    link.get("source_path"),
+                )
+                existing = matched_links_by_record.get(record_key)
+                subject = {
+                    "subject_identity": link.get("subject_identity"),
+                    "subject_name": link.get("subject_name"),
+                }
+                if existing is None:
+                    matched_links_by_record[record_key] = {
+                        **link,
+                        "libraries": [dict(row) for row in link.get("libraries", [])],
+                        "finding_ids": sorted(set(link.get("finding_ids", []))),
+                        "linked_candidate_ids": [candidate_id] if candidate_id else [],
+                        "linked_subjects": [subject],
+                    }
+                    continue
+                existing["finding_ids"] = sorted(
+                    {*existing.get("finding_ids", []), *link.get("finding_ids", [])}
+                )
+                existing["linked_candidate_ids"] = sorted(
+                    {
+                        *existing.get("linked_candidate_ids", []),
+                        *([candidate_id] if candidate_id else []),
+                    }
+                )
+                subjects = {
+                    (row.get("subject_identity"), row.get("subject_name")): row
+                    for row in existing.get("linked_subjects", [])
+                }
+                subjects[(subject["subject_identity"], subject["subject_name"])] = subject
+                existing["linked_subjects"] = sorted(
+                    subjects.values(),
+                    key=lambda row: (
+                        str(row.get("subject_name") or ""),
+                        str(row.get("subject_identity") or ""),
+                    ),
+                )
+                libraries = {
+                    (
+                        row.get("component_identity"),
+                        row.get("occurrence_id"),
+                        row.get("document_id"),
+                    ): row
+                    for row in existing.get("libraries", [])
+                }
+                for library in link.get("libraries", []):
+                    libraries[
+                        (
+                            library.get("component_identity"),
+                            library.get("occurrence_id"),
+                            library.get("document_id"),
+                        )
+                    ] = dict(library)
+                existing["libraries"] = sorted(
+                    libraries.values(),
+                    key=lambda row: (
+                        str(row.get("name") or ""),
+                        str(row.get("version") or ""),
+                        int(row.get("occurrence_id") or 0),
+                    ),
+                )
+        matched_links = sorted(
+            matched_links_by_record.values(),
+            key=lambda link: (
+                str(link.get("service_group_ref") or ""),
+                str(link.get("service_record_name") or ""),
+                int(link.get("document_id") or 0),
+            ),
+        )
+        for link in matched_links:
+            subject_count = len(link.get("linked_subjects", []))
+            if subject_count > 1:
+                link["subject_name"] = f"{subject_count} linked candidate subjects"
         all_linked_candidate_ids.update(candidate_ids)
         service_groups = sorted(
             {str(link["service_group_ref"]) for link in matched_links}
@@ -541,8 +747,44 @@ def build_portfolio_poam_items(items: list[dict[str, Any]]) -> list[dict[str, An
             for link in matched_links
             for library in link.get("libraries", [])
         }
+        target_modules_by_hash: dict[str, dict[str, Any]] = {}
+        for link in matched_links:
+            for module in (link.get("planning") or {}).get("target_modules", []):
+                if module.get("target_disposition") != specification["match_status"]:
+                    continue
+                record_key = str(module.get("record_sha256") or repr(module))
+                target_modules_by_hash[record_key] = {
+                    "team": module.get("team"),
+                    "team_key": module.get("team_key"),
+                    "current_module": module.get("current_module"),
+                    "current_version": module.get("current_version"),
+                    "used_by": module.get("used_by"),
+                    "target_module": module.get("target_module"),
+                    "target_version": module.get("target_version"),
+                    "asserted_status": module.get("asserted_status"),
+                    "normalized_status": module.get("normalized_status"),
+                    "current_cmvp_cert": module.get("current_cmvp_cert"),
+                    "target_cmvp_cert": module.get("target_cmvp_cert"),
+                    "target_disposition": module.get("target_disposition"),
+                    "disposition_basis": module.get("disposition_basis"),
+                    "reason": module.get("reason"),
+                    "evidence_grade": module.get("evidence_grade"),
+                    "review_required": module.get("review_required"),
+                    "record_sha256": module.get("record_sha256"),
+                    "assertion_subject_sha256": module.get("assertion_subject_sha256"),
+                    "verification": module.get("verification"),
+                    "evidence_summary": module.get("evidence_summary"),
+                }
+        target_modules = sorted(
+            target_modules_by_hash.values(),
+            key=lambda row: (
+                str(row.get("team") or ""),
+                str(row.get("current_module") or ""),
+                str(row.get("target_module") or ""),
+            ),
+        )
         group_slugs = [reference.rsplit("/", 1)[-1] for reference in service_groups]
-        waves = portfolio_delivery_waves(group_slugs)
+        waves = portfolio_delivery_waves(group_slugs, target_module_contract)
         dated = sorted(
             {
                 str(group.get("farthest_explicit_il2_date"))
@@ -580,9 +822,18 @@ def build_portfolio_poam_items(items: list[dict[str, Any]]) -> list[dict[str, An
                     for identity, name, version in sorted(libraries)
                 ],
                 "affected_library_count": len(libraries),
+                "target_modules": target_modules,
+                "target_module_count": len(target_modules),
+                "target_module_source": (
+                    target_module_contract.get("source") if target_module_contract else None
+                ),
                 "service_scope_links": matched_links,
                 "milestone_deliverables": waves,
-                "evidence_basis": "Team Tracker CMVP mapping plus linked catalog candidate evidence",
+                "evidence_basis": (
+                    "Imported target-module planning assertions plus linked catalog candidate evidence"
+                    if target_module_contract
+                    else "Team Tracker CMVP mapping plus linked catalog candidate evidence"
+                ),
                 "evidence_grade": "user_asserted planning metadata joined to inventory evidence",
                 "merge_decision": "review_required",
                 "merge_blockers": [

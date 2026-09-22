@@ -46,6 +46,7 @@ class FingerprintRefreshTests(unittest.TestCase):
                 "IOS-NO_CBOM",
                 "RSM-SECURE_CLIENT-NO_CBOM",
                 "SWG-ROAMING-CLIENT-NO_CBOM",
+                "ON-PREM-CLIENTS-NO_CBOM",
             ),
         )
 

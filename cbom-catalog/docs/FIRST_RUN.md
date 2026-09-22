@@ -25,6 +25,9 @@ cp .env.example .env
 docker compose up -d postgres
 docker compose run --rm migrate
 docker compose --profile tools run --rm ingest
+docker compose --profile tools run --rm target-modules
+docker compose --profile tools run --rm target-public-evidence
+docker compose --profile tools run --rm target-catalog-evidence
 docker compose up -d --build api web
 docker compose ps
 ```
@@ -49,6 +52,9 @@ overrides consistently:
 POSTGRES_PORT=55433 API_PORT=8011 WEB_PORT=3015 docker compose up -d postgres
 POSTGRES_PORT=55433 API_PORT=8011 WEB_PORT=3015 docker compose run --rm migrate
 POSTGRES_PORT=55433 API_PORT=8011 WEB_PORT=3015 docker compose --profile tools run --rm ingest
+POSTGRES_PORT=55433 API_PORT=8011 WEB_PORT=3015 docker compose --profile tools run --rm target-modules
+POSTGRES_PORT=55433 API_PORT=8011 WEB_PORT=3015 docker compose --profile tools run --rm target-public-evidence
+POSTGRES_PORT=55433 API_PORT=8011 WEB_PORT=3015 docker compose --profile tools run --rm target-catalog-evidence
 POSTGRES_PORT=55433 API_PORT=8011 WEB_PORT=3015 docker compose up -d --build api web
 ```
 
@@ -76,6 +82,7 @@ does not replace retention of the exact source bytes.
 ```bash
 curl --fail http://127.0.0.1:8000/healthz
 curl --fail http://127.0.0.1:8000/api/v1/stats
+curl --fail http://127.0.0.1:8000/api/v1/fips/target-modules
 docker compose logs --no-color --tail=100 api web
 ```
 

@@ -16,13 +16,18 @@ every checksum ever observed for each source path.
 
 The current 2026-09-18 source snapshot contains 534 JSON files (~160 MiB) in 35
 populated input folders. Approved aliases are canonicalized into a catalog that
-retains 39 service-group categories, including four historical no-data groups:
+retains 40 service-group categories, including five approved no-data coverage
+groups:
 
 | Input | Count | Notes |
 |---|---:|---|
 | CycloneDX 1.6 | 533 | The main SBOM/CBOM representation |
 | CycloneDX 1.7 | 1 | Includes services, annotations, dependencies, and crypto properties |
 | Other source formats | 0 | The older snapshot still demonstrates SPDX, OSCAL, FIPS-report, CSV, and summary parsers |
+
+The root-cause analysis for the earlier mixed-format view and the independent
+current/target-module evidence model are in
+[`docs/CLAIM_EVIDENCE_AND_PROVENANCE_2026-09-21.md`](docs/CLAIM_EVIDENCE_AND_PROVENANCE_2026-09-21.md).
 
 No CycloneDX 1.5 document and no substantive Snyk enrichment field is present in
 this snapshot. The parser accepts CycloneDX 1.5 and generic/custom properties so
@@ -67,6 +72,9 @@ cp .env.example .env
 docker compose up -d postgres
 docker compose run --rm migrate
 docker compose --profile tools run --rm ingest
+docker compose --profile tools run --rm target-modules
+docker compose --profile tools run --rm target-public-evidence
+docker compose --profile tools run --rm target-catalog-evidence
 docker compose up -d --build api web
 ```
 

@@ -34,11 +34,12 @@ signal is never proof of CMVP validation or FedRAMP compliance.
    in that collection as historical (`is_present=false`). Do not delete their
    documents or fingerprint history.
 
-For the `sse-cboms` collection, ingestion also registers four approved coverage
+For the `sse-cboms` collection, ingestion also registers five approved coverage
 categories even when the current source tree has no matching directory:
 `ANDROID-NO_CBOM`, `IOS-NO_CBOM`, `RSM-SECURE_CLIENT-NO_CBOM`, and
-`SWG-ROAMING-CLIENT-NO_CBOM`. This makes a clean source import reproduce the
-39-group inventory instead of depending on rows inherited from an older
+`SWG-ROAMING-CLIENT-NO_CBOM`, and `ON-PREM-CLIENTS-NO_CBOM`. This makes a clean
+source import reproduce the 40-group roster implied by the 39 team rows (the
+shared PAC row expands to three groups and the two SCC rows merge) instead of depending on rows inherited from an older
 database. These registry entries have zero files and remain evidence gaps until
 data is supplied.
 
@@ -90,6 +91,22 @@ Do not use `--authoritative-snapshot` for a partial download. Do not reuse a
 collection name for an unrelated corpus. When normalization semantics change,
 rebuild into a separate database and compare before promotion.
 
+### Target-module planning import
+
+Per-team module plans are a separate, checksum-gated input so a planning refresh
+does not rewrite catalog evidence:
+
+```bash
+CBOM_TARGET_MODULES_FILE=../FIPS-140-3-21-sept.json \
+  docker compose --profile tools run --rm target-modules
+```
+
+`target_module_import` retains the exact JSON, source filename, SHA-256,
+retrieval date, and immutable import history. Importing the same checksum is a
+no-op. `team_target_module` retains every raw module row and its record checksum;
+one import is marked active for current views. A database snapshot therefore
+contains both the catalog and the planning-data provenance.
+
 ## Assessment pipeline
 
 The assessment engine is deterministic and scoped by source collection and,
@@ -106,9 +123,11 @@ optionally, service group. It:
 6. aggregates operational workstreams without discarding asset candidates;
 7. joins every eligible candidate back to its service record, service group,
    source checksum, component/library identity, finding, owner, lead, and ETA;
-8. creates two portfolio review dimensions for active-certificate migrations
-   and CMVP In-Test/In-Progress dependencies; and
-9. enriches the view with Team Tracker owner, lead, IL2, and IL5 metadata.
+8. joins the active target-module import by canonical team/service-group mapping;
+9. creates two portfolio review dimensions for active-certificate targets and
+   CMVP In-Test/In-Progress dependencies; and
+10. enriches the view with owner, lead, IL2, IL5, module status, certificate
+    assertion, and target-module provenance.
 
 IL2 is the POA&M planning milestone. All explicit IL2 dates mapped to an item are
 retained and the farthest explicit date becomes its proposed mitigation date.
@@ -121,12 +140,19 @@ library records keep their mapped group’s own ETA, and candidate mitigation
 dates continue to use the farthest explicit linked IL2 date. Missing or relative
 dates remain uncommitted.
 
-The Team Tracker `CMVP Mapping (Active/Historical/Testing)` field is normalized
-into `active_certificate`, `cmvp_in_process`, `historical_or_legacy`, or
-`not_determined`. It is user-asserted planning metadata. Only the first two
-states feed the requested two-row portfolio view; nothing is forced into those
-dimensions. Exact deployment-to-certificate correlation remains an assessor
-review gate.
+Target-module rows are normalized separately from the source status. Supported
+target dispositions are `active_certificate`, `cmvp_in_process`,
+`planned_unverified`, `not_supplied`, `not_applicable`, and `not_determined`.
+`Pending Certification` always remains `cmvp_in_process`, even if the row names
+a certificate, because the deployed build may differ from the tested build.
+Only `active_certificate` and `cmvp_in_process` feed the requested two-row
+portfolio view; nothing is forced into either dimension.
+
+Every source status—including `Compliant`—is retained as a user assertion.
+Certificate text is a correlation lead, not validation evidence. Exact module
+name, security policy, version/build, cryptographic boundary, operational
+environment, artifact digest, approved mode, deployed configuration, and ATO
+scope remain assessor review gates.
 
 Coverage states (`not_assessable`, `evidence_gap`) request evidence and are not
 POA&M eligible. Candidate findings remain machine-generated until the system
@@ -139,7 +165,8 @@ mode, ATO scope, impact, owner, dates, and disposition.
 - `source_file` is the current path state; `source_file_fingerprint` is immutable
   checksum observation history; `document.sha256` is exact-content identity.
 - `ingest_run` records parser version, refresh mode, counts, and outcome.
-- Tracker data is pinned to its source filename/URL and source SHA-256.
+- Target-module planning data is pinned to its source filename, source SHA-256,
+  raw JSON, immutable import ID, and record SHA-256 values.
 - Assessment results include a policy version, run ID, evidence fingerprints,
   scope, limitations, and explicit review requirements.
 - POA&M IDs and workstream IDs are derived from stable deduplication inputs.

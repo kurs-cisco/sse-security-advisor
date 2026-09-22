@@ -58,3 +58,5 @@ cbom-catalog/snapshots/*
 # control inputs. Keep them locally for ingestion and workspace tests.
 /SSE_CBOMS/
 /OneDrive_1_9-18-2026/
+/FIPS-140-3-21-sept.json
+cbom-catalog/evidence/*.json

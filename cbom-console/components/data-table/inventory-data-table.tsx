@@ -99,11 +99,11 @@ export function InventoryDataTable<TData>({
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[840px] text-left text-sm">
-          <thead className="bg-muted/45 text-xs uppercase tracking-[0.12em] text-muted-foreground">
+          <thead className="bg-muted text-xs uppercase tracking-[0.12em] text-muted-foreground">
             {table.getHeaderGroups().map((headerGroup) => (
               <tr key={headerGroup.id}>
                 {headerGroup.headers.map((header) => (
-                  <th key={header.id} className="h-11 px-4 font-medium" aria-sort={header.column.getIsSorted() === "asc" ? "ascending" : header.column.getIsSorted() === "desc" ? "descending" : undefined}>
+                  <th key={header.id} className="sticky top-0 z-10 h-11 bg-muted px-4 font-medium" aria-sort={header.column.getIsSorted() === "asc" ? "ascending" : header.column.getIsSorted() === "desc" ? "descending" : undefined}>
                     {header.isPlaceholder ? null : (
                       <button
                         type="button"

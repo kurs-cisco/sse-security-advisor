@@ -9,7 +9,6 @@ from datetime import date, datetime
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-
 POLICY_VERSION = "FIPS1403-MIGRATION-2026-09-18"
 ASSESSOR_VERSION = "1.0.0"
 LAST_NEW_SYSTEM_DATE = date(2026, 9, 21)
@@ -1376,6 +1375,10 @@ PORTFOLIO_POAM_CSV_FIELDS = [
     "Affected Service Groups",
     "Affected Service Records",
     "Affected Libraries",
+    "Target Modules",
+    "Target Dispositions",
+    "CMVP Certificates",
+    "Target Module Source SHA-256",
     "October Milestone Groups",
     "December Milestone Groups",
     "March Milestone Groups",
@@ -1398,10 +1401,10 @@ def render_portfolio_poam_csv(items: list[dict[str, Any]]) -> str:
     for item in sorted(items, key=lambda row: row["portfolio_poam_id"]):
         waves = {row["wave"]: row for row in item.get("milestone_deliverables", [])}
 
-        def wave_groups(wave: str) -> str:
+        def wave_groups(wave: str, wave_map: dict[str, Any] = waves) -> str:
             return "; ".join(
                 f"{row.get('service_group')} ({row.get('farthest_explicit_il2_date') or 'date-not-supplied'})"
-                for row in waves.get(wave, {}).get("service_groups", [])
+                for row in wave_map.get(wave, {}).get("service_groups", [])
             )
 
         writer.writerow(
@@ -1421,6 +1424,36 @@ def render_portfolio_poam_csv(items: list[dict[str, Any]]) -> str:
                 "Affected Libraries": "; ".join(
                     f"{row.get('name')}@{row.get('version') or 'unknown'}"
                     for row in item["affected_libraries"]
+                ),
+                "Target Modules": "; ".join(
+                    f"{row.get('team') or 'team-not-supplied'}: "
+                    f"{row.get('current_module') or 'module-not-supplied'} -> "
+                    f"{row.get('target_module') or 'target-not-supplied'}"
+                    for row in item.get("target_modules", [])
+                ),
+                "Target Dispositions": "; ".join(
+                    sorted(
+                        {
+                            str(row.get("target_disposition") or "not_determined")
+                            for row in item.get("target_modules", [])
+                        }
+                    )
+                ),
+                "CMVP Certificates": "; ".join(
+                    sorted(
+                        {
+                            f"{kind}:{certificate}"
+                            for row in item.get("target_modules", [])
+                            for kind, certificate in (
+                                ("target", row.get("target_cmvp_cert")),
+                                ("current", row.get("current_cmvp_cert")),
+                            )
+                            if certificate
+                        }
+                    )
+                ),
+                "Target Module Source SHA-256": (
+                    (item.get("target_module_source") or {}).get("source_file_sha256") or ""
                 ),
                 "October Milestone Groups": wave_groups("october_2026"),
                 "December Milestone Groups": wave_groups("december_2026"),

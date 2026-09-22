@@ -23,9 +23,10 @@ GET /api/v1/fips/portfolio-poam.csv
 ```
 
 - `FIPS3-PORTFOLIO-ACTIVE-CERT` links candidate assets whose mapped Team
-  Tracker row names an active FIPS 140-3 certificate or active module target.
+  target-module row names an active certificate target or supplies a
+  certificate with an asserted-compliant status.
 - `FIPS3-PORTFOLIO-CMVP-PIPELINE` links candidate assets whose mapped target is
-  described as CMVP In-Test, Testing, or In-Progress.
+  asserted as Pending Certification / CMVP In-Test or In-Progress.
 
 These are portfolio planning candidates, not two automatically accepted POA&M
 records. Unknown, historical-only, and ambiguous module mappings remain
@@ -48,6 +49,9 @@ are not silently converted into POA&M rows.
 The compliance ZIP contains the portfolio, issue-workstream, and asset-level
 CSVs plus the assessment summary and manifest. This preserves the two-row
 management view without discarding the evidence needed to split a candidate.
+The portfolio CSV also carries team/current/target module text, normalized
+target disposition, asserted certificate values, and the target-module source
+SHA-256.
 
 ## Candidate fields and review gates
 

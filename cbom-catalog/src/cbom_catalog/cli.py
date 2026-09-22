@@ -53,6 +53,27 @@ def main() -> None:
         help="Stable base URI such as s3://bucket/prefix; required with --no-raw-json",
     )
 
+    target_parser = subparsers.add_parser(
+        "import-target-modules",
+        help="Import checksum-gated per-team target-module planning data",
+    )
+    target_parser.add_argument("path", type=Path)
+    target_parser.add_argument("--database-url", default=os.environ.get("DATABASE_URL"))
+
+    evidence_parser = subparsers.add_parser(
+        "import-target-evidence",
+        help="Import checksum-gated public and catalog evidence for target-module claims",
+    )
+    evidence_parser.add_argument("path", type=Path)
+    evidence_parser.add_argument("--database-url", default=os.environ.get("DATABASE_URL"))
+
+    catalog_evidence_parser = subparsers.add_parser(
+        "import-catalog-claim-evidence",
+        help="Import checksum-gated CBOM current-version correlation evidence",
+    )
+    catalog_evidence_parser.add_argument("path", type=Path)
+    catalog_evidence_parser.add_argument("--database-url", default=os.environ.get("DATABASE_URL"))
+
     args = parser.parse_args()
     if args.command == "inventory":
         result = build_inventory(args.root, limit=args.limit)
@@ -81,6 +102,21 @@ def main() -> None:
             authoritative_snapshot=args.authoritative_snapshot,
         )
         print(json.dumps(stats_as_dict(stats), indent=2))
+        return
+    if args.command == "import-target-modules":
+        from .target_modules import import_target_modules
+
+        print(json.dumps(import_target_modules(args.path, args.database_url), indent=2))
+        return
+    if args.command == "import-target-evidence":
+        from .target_modules import import_target_module_evidence
+
+        print(json.dumps(import_target_module_evidence(args.path, args.database_url), indent=2))
+        return
+    if args.command == "import-catalog-claim-evidence":
+        from .target_modules import import_catalog_claim_evidence
+
+        print(json.dumps(import_catalog_claim_evidence(args.path, args.database_url), indent=2))
 
 
 def _env_bool(name: str, default: bool) -> bool:

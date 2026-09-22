@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import io
 import json
 import logging
 import os
 import re
 import time
 import uuid
-import io
 import zipfile
 from collections import OrderedDict, defaultdict, deque
 from pathlib import Path
@@ -32,6 +32,7 @@ from .fips_assessment import (
     render_portfolio_poam_csv,
     render_workstream_csv,
 )
+from .target_modules import load_active_target_modules
 from .team_milestones import (
     build_portfolio_poam_items,
     enrich_poam_items,
@@ -250,8 +251,25 @@ def _fetch_one(sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | None:
 
 
 def _catalog_revision() -> int:
-    row = _fetch_one("SELECT coalesce(max(id), 0) AS revision FROM ingest_run")
-    return int((row or {}).get("revision") or 0)
+    row = _fetch_one(
+        """
+        SELECT coalesce((SELECT max(id) FROM ingest_run), 0) AS ingest_revision,
+               coalesce((SELECT max(id) FROM target_module_import), 0) AS target_revision,
+               coalesce((SELECT max(id) FROM target_module_evidence_import), 0) AS evidence_revision
+        """
+    )
+    # Keep one numeric revision for cache and ETag compatibility while ensuring
+    # a planning-data import invalidates assessment and register responses.
+    return (
+        int((row or {}).get("ingest_revision") or 0) * 1_000_000_000_000
+        + int((row or {}).get("target_revision") or 0) * 1_000_000
+        + int((row or {}).get("evidence_revision") or 0)
+    )
+
+
+def _active_target_module_contract() -> dict[str, Any] | None:
+    with api_connection() as connection:
+        return load_active_target_modules(connection)
 
 
 def _cached_catalog_value(
@@ -367,6 +385,7 @@ def _load_fips_assessment(
     source_collection: str | None,
     service_group: str | None,
 ) -> dict[str, Any]:
+    target_module_contract = _active_target_module_contract()
     scoped_cte, scope_params = _fips_scope_cte(source_collection, service_group)
     scope_where, inventory_params = _scope_sql(source_collection, service_group)
     service_group_inventory = _fetch_all(
@@ -516,17 +535,20 @@ def _load_fips_assessment(
         service_group_inventory=service_group_inventory,
     )
     if "poam_items" in assessment:
-        assessment["poam_items"] = enrich_poam_items(assessment["poam_items"])
+        assessment["poam_items"] = enrich_poam_items(
+            assessment["poam_items"], target_module_contract
+        )
         assessment["poam_workstreams"] = build_poam_workstreams(assessment["poam_items"])
         assessment["portfolio_poam_items"] = build_portfolio_poam_items(
-            assessment["poam_items"]
+            assessment["poam_items"], target_module_contract
         )
         assessment["portfolio_delivery_waves"] = portfolio_delivery_waves(
             [
                 str(row.get("service") or "").rsplit("/", 1)[-1]
                 for row in assessment.get("service_groups", [])
                 if row.get("service")
-            ]
+            ],
+            target_module_contract,
         )
         assessment.setdefault("summary", {})["proposed_remediation_workstreams"] = len(
             assessment["poam_workstreams"]
@@ -1008,7 +1030,9 @@ def service_group_register(
     overview, _, _ = _cached_catalog_value(
         "dashboard-overview", (None, None), lambda: _build_dashboard_overview(None, None)
     )
-    all_rows = _service_group_register_rows(assessment, overview, team_milestones())
+    all_rows = _service_group_register_rows(
+        assessment, overview, team_milestones(_active_target_module_contract())
+    )
     rows = _filter_service_group_register(
         all_rows, query=query, owner=owner, lead=lead,
         il2_state=il2_state, il5_state=il5_state, action=action,
@@ -1613,7 +1637,7 @@ def service_group_register_detail(
         (source_collection, service_group),
         lambda: _build_dashboard_overview(source_collection, service_group),
     )
-    milestone_contract = team_milestones()
+    milestone_contract = team_milestones(_active_target_module_contract())
     register_rows = _service_group_register_rows(assessment, overview, milestone_contract)
     if not register_rows:
         raise HTTPException(status_code=404, detail="Service group not found")
@@ -2186,7 +2210,51 @@ def fips_assessment(
 @app.get("/api/v1/fips/team-milestones", tags=["FIPS 140-3 assessment"])
 def fips_team_milestones() -> dict[str, Any]:
     """Reviewed tracker crosswalk; planning metadata only, never validation evidence."""
-    return team_milestones()
+    return team_milestones(_active_target_module_contract())
+
+
+@app.get("/api/v1/fips/target-modules", tags=["FIPS 140-3 assessment"])
+def fips_target_modules() -> dict[str, Any]:
+    """Active checksum-addressed target-module planning import."""
+    contract = _active_target_module_contract()
+    if contract is None:
+        return {
+            "source": None,
+            "teams": [],
+            "groups": {},
+            "disclaimer": "No target-module planning import is active.",
+        }
+    return {
+        **contract,
+        "disclaimer": (
+            "Team status and certificate fields are user-asserted planning metadata. "
+            "They do not prove a deployed module/version/environment match or FIPS validation."
+        ),
+    }
+
+
+@app.get("/api/v1/fips/target-modules/{record_sha256}/evidence", tags=["FIPS 140-3 assessment"])
+def fips_target_module_evidence(record_sha256: str) -> dict[str, Any]:
+    """Checksum-addressed claim evidence; never a deployment validation decision."""
+    contract = _active_target_module_contract()
+    if contract is None:
+        raise HTTPException(status_code=404, detail="No active target-module import")
+    for team in contract["teams"]:
+        for module in team["modules"]:
+            if module["record_sha256"] == record_sha256:
+                return {
+                    "record_sha256": record_sha256,
+                    "team": team["team"],
+                    "assertion": {key: module.get(key) for key in (
+                        "current_module", "current_version", "target_module", "target_version",
+                        "asserted_status", "current_cmvp_cert", "target_cmvp_cert",
+                    )},
+                    "verification": module["verification"],
+                    "evidence_summary": module["evidence_summary"],
+                    "evidence": module["evidence"],
+                    "disclaimer": "Evidence correlations are candidate analysis and do not prove deployment applicability or FIPS validation.",
+                }
+    raise HTTPException(status_code=404, detail="Target-module assertion not found")
 
 
 @app.get("/api/v1/fips/poam.csv", tags=["FIPS 140-3 assessment"])
@@ -2277,7 +2345,9 @@ def fips_compliance_package_export(
                 "coverage_gaps": assessment.get("coverage_gaps"),
                 "portfolio_poam_items": assessment.get("portfolio_poam_items"),
                 "portfolio_delivery_waves": assessment.get("portfolio_delivery_waves"),
-                "team_tracker_source": team_milestones().get("source"),
+                "team_tracker_source": team_milestones(
+                    _active_target_module_contract()
+                ).get("source"),
                 "disclaimer": "Machine-generated candidate analysis for authorized review; not an assessor conclusion, authorization decision, or proof of CMVP validation.",
             }),
             indent=2,

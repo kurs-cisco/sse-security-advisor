@@ -37,6 +37,8 @@ SERVICE_GROUP_ALIASES: dict[str, tuple[str, str]] = {
     "taac": ("taac-cbom", "TAAC-cbom"),
     "app-control": ("app-control", "App-Control"),
     "fis-sma-threatgrid": ("fis-sma-threatgrid", "FIS/SMA Threatgrid"),
+    "on-prem-clients": ("on-prem-clients", "On Prem / Clients"),
+    "on-prem-clients-no-cbom": ("on-prem-clients", "On Prem / Clients"),
 }
 
 # Coverage categories that must survive even when the current corpus has no
@@ -49,6 +51,7 @@ RETAINED_EMPTY_SERVICE_GROUPS_BY_COLLECTION: dict[str, tuple[str, ...]] = {
         "IOS-NO_CBOM",
         "RSM-SECURE_CLIENT-NO_CBOM",
         "SWG-ROAMING-CLIENT-NO_CBOM",
+        "ON-PREM-CLIENTS-NO_CBOM",
     ),
 }
 

@@ -4,6 +4,7 @@ import * as React from "react";
 import {
   AlertTriangle, ArrowDown, ArrowUp, BookOpenCheck, Boxes, CalendarClock,
   ChevronRight, CircleAlert, ExternalLink, FileCode2, FilterX,
+  ChevronsDownUp,
   LibraryBig, RefreshCw, Search, ShieldCheck, UserRound, UsersRound, X,
 } from "lucide-react";
 import { Badge } from "@/app/components/ui/badge";
@@ -22,6 +23,11 @@ function ownerLabel(row: ServiceGroupRegisterRow) {
   if (!row.effective_owners.length) return "Not supplied";
   if (row.effective_owners.length > 1) return `Multiple — ${row.effective_owners.join(", ")}`;
   return row.effective_owners[0];
+}
+
+function ownerGroupId(owner: string) {
+  const slug = owner.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  return `accountability-owner-${slug || "unknown"}`;
 }
 
 function PlanningCell({ plan, label }: { plan: PlanningSummary; label: string }) {
@@ -51,6 +57,7 @@ export function ServiceAccountability() {
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState("");
   const [selected, setSelected] = React.useState<ServiceGroupRegisterRow | null>(null);
+  const [collapsedOwners, setCollapsedOwners] = React.useState<Set<string>>(new Set());
   const [revision, setRevision] = React.useState(0);
   const linkedGroup = React.useRef<string | null>(null);
 
@@ -92,8 +99,16 @@ export function ServiceAccountability() {
     return [...groups.entries()];
   }, [rows]);
   const hasFilters = Boolean(query || owner || lead || il2State || il5State || action);
+  const allOwnersCollapsed = grouped.length > 0 && grouped.every(([groupOwner]) => collapsedOwners.has(groupOwner));
   const toggleSort = (next: SortKey) => { if (sort === next) setDirection((value) => value === "asc" ? "desc" : "asc"); else { setSort(next); setDirection(next === "findings" || next === "poam" || next === "documents" || next === "libraries" ? "desc" : "asc"); } };
   const reset = () => { setQuery(""); setOwner(""); setLead(""); setIl2State(""); setIl5State(""); setAction(""); };
+  const toggleOwner = (groupOwner: string) => setCollapsedOwners((current) => {
+    const next = new Set(current);
+    if (next.has(groupOwner)) next.delete(groupOwner);
+    else next.add(groupOwner);
+    return next;
+  });
+  const toggleAllOwners = () => setCollapsedOwners(allOwnersCollapsed ? new Set() : new Set(grouped.map(([groupOwner]) => groupOwner)));
 
   return <div className="accountability-workbench">
     <section className="page-heading inventory-heading">
@@ -111,11 +126,18 @@ export function ServiceAccountability() {
         <select aria-label="Filter by candidate action" value={action} onChange={(event) => setAction(event.target.value)}><option value="">All candidate actions</option><option value="has_poam">Has draft POA&amp;M</option><option value="has_findings">Has findings</option><option value="review_only">Needs evidence review</option><option value="no_action">No mapped action</option></select>
         <button type="button" className="secondary-button" disabled={!hasFilters} onClick={reset}><FilterX size={15} />Clear</button>
       </div>
-      <div className="flex items-center justify-between border-b border-border px-5 py-3 text-xs text-muted-foreground"><span><strong className="text-foreground">{total}</strong> scoped service groups</span><span>Grouped by Executive owner <span className="hidden sm:inline">(effective owner from Team Tracker)</span></span></div>
-      <div className="overflow-x-auto">
+      <div className="accountability-summary"><span><strong className="text-foreground">{total}</strong> scoped service groups</span><div className="accountability-summary-actions"><span>Grouped by Executive owner <span className="hidden sm:inline">(effective owner from Team Tracker)</span></span><button type="button" className="owner-collapse-all" onClick={toggleAllOwners} disabled={!grouped.length} aria-label={allOwnersCollapsed ? "Expand all executive owner groups" : "Collapse all executive owner groups"}><ChevronsDownUp className="size-3.5" />{allOwnersCollapsed ? "Expand all" : "Collapse all"}</button></div></div>
+      <div className="accountability-table-scroll">
         <table className="accountability-table">
           <thead><tr><th><SortButton id="service_group" active={sort} direction={direction} onSort={toggleSort}>Service group</SortButton></th><th><SortButton id="lead" active={sort} direction={direction} onSort={toggleSort}>Lead</SortButton></th><th><SortButton id="il2" active={sort} direction={direction} onSort={toggleSort}>IL2 plan</SortButton></th><th><SortButton id="il5" active={sort} direction={direction} onSort={toggleSort}>IL5 plan</SortButton></th><th><SortButton id="documents" active={sort} direction={direction} onSort={toggleSort}>Catalog evidence</SortButton></th><th><SortButton id="libraries" active={sort} direction={direction} onSort={toggleSort}>Crypto assets</SortButton></th><th><SortButton id="findings" active={sort} direction={direction} onSort={toggleSort}>Findings</SortButton></th><th><SortButton id="poam" active={sort} direction={direction} onSort={toggleSort}>Draft POA&amp;M</SortButton></th><th><span className="sr-only">Actions</span></th></tr></thead>
-          <tbody>{grouped.map(([groupOwner, items]) => <React.Fragment key={groupOwner}><tr className="owner-group-row"><td colSpan={9}><div><UserRound className="size-4" /><span>Executive owner</span><strong>{groupOwner}</strong><small>{items.length} service group{items.length === 1 ? "" : "s"}</small></div></td></tr>{items.map((row) => <tr key={row.service_key} className="accountability-row"><td><button type="button" className="text-left" onClick={() => setSelected(row)}><strong>{row.display_name}</strong><span className="mono">{row.service_key}</span></button></td><td>{row.leads.length ? <span className="text-sm text-foreground">{row.leads.join(", ")}</span> : <span className="missing-value">Not supplied</span>}</td><td><PlanningCell plan={row.il2} label="IL2" /></td><td><PlanningCell plan={row.il5} label="IL5" /></td><td><button type="button" className="metric-link" onClick={() => setSelected(row)}><FileCode2 /><span><strong>{row.documents}</strong><small>{row.documents_with_fips_evidence}/{row.documents} with FIPS signals</small></span></button></td><td><div className="table-count"><strong>{row.candidate_crypto_assets}</strong><small>{row.candidate_crypto_libraries} librar{row.candidate_crypto_libraries === 1 ? "y" : "ies"}</small></div></td><td><div className="table-count"><strong className={row.finding_count ? "text-amber-700 dark:text-amber-300" : ""}>{row.finding_count}</strong><small>{row.review_observations} review-only</small></div></td><td><div className="table-count"><strong className={row.poam_candidate_count ? "text-primary" : ""}>{row.poam_candidate_count}</strong><small>{row.workstream_count} workstream{row.workstream_count === 1 ? "" : "s"}</small></div></td><td><button type="button" className="table-action" onClick={() => setSelected(row)}>Open <ChevronRight className="size-3.5" /></button></td></tr>)}</React.Fragment>)}</tbody>
+          {grouped.map(([groupOwner, items]) => {
+            const isCollapsed = collapsedOwners.has(groupOwner);
+            const groupId = ownerGroupId(groupOwner);
+            return <tbody key={groupOwner} id={groupId} className={isCollapsed ? "accountability-owner-group is-collapsed" : "accountability-owner-group"}>
+              <tr className="owner-group-row"><td colSpan={9}><button type="button" className="owner-group-toggle" onClick={() => toggleOwner(groupOwner)} aria-expanded={!isCollapsed} aria-controls={groupId}><span className="owner-group-label"><ChevronRight className="size-4" /><UserRound className="size-4" /><span>Executive owner</span><strong>{groupOwner}</strong></span><small>{items.length} service group{items.length === 1 ? "" : "s"}</small></button></td></tr>
+              {!isCollapsed ? items.map((row) => <tr key={row.service_key} className="accountability-row"><td><button type="button" className="text-left" onClick={() => setSelected(row)}><strong>{row.display_name}</strong><span className="mono">{row.service_key}</span></button></td><td>{row.leads.length ? <span className="text-sm text-foreground">{row.leads.join(", ")}</span> : <span className="missing-value">Not supplied</span>}</td><td><PlanningCell plan={row.il2} label="IL2" /></td><td><PlanningCell plan={row.il5} label="IL5" /></td><td><button type="button" className="metric-link" onClick={() => setSelected(row)}><FileCode2 /><span><strong>{row.documents}</strong><small>{row.documents_with_fips_evidence}/{row.documents} with FIPS signals</small></span></button></td><td><div className="table-count"><strong>{row.candidate_crypto_assets}</strong><small>{row.candidate_crypto_libraries} librar{row.candidate_crypto_libraries === 1 ? "y" : "ies"}</small></div></td><td><div className="table-count"><strong className={row.finding_count ? "text-amber-700 dark:text-amber-300" : ""}>{row.finding_count}</strong><small>{row.review_observations} review-only</small></div></td><td><div className="table-count"><strong className={row.poam_candidate_count ? "text-primary" : ""}>{row.poam_candidate_count}</strong><small>{row.workstream_count} workstream{row.workstream_count === 1 ? "" : "s"}</small></div></td><td><button type="button" className="table-action" onClick={() => setSelected(row)}>Open <ChevronRight className="size-3.5" /></button></td></tr>) : null}
+            </tbody>;
+          })}
         </table>
         {!loading && !rows.length ? <div className="px-6 py-16 text-center text-sm text-muted-foreground">{error ? <span role="alert" className="text-danger">Unable to load the live register: {error}</span> : "No service groups match the current filters."}</div> : null}
         {loading ? <div className="px-6 py-16 text-center text-sm text-muted-foreground">Loading service accountability…</div> : null}

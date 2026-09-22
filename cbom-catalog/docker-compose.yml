@@ -115,8 +115,68 @@ services:
       CBOM_FORCE_REPROCESS: ${CBOM_FORCE_REPROCESS:-false}
       CBOM_AUTHORITATIVE_SNAPSHOT: ${CBOM_AUTHORITATIVE_SNAPSHOT:-false}
     volumes:
-      - ${CBOM_CORPUS_ROOT:-../SSE_CBOMS}:/data/SSE_CBOMS:ro
+      - ${CBOM_CORPUS_ROOT:-../OneDrive_1_9-18-2026}:/data/SSE_CBOMS:ro
     command: ["cbom-catalog", "ingest", "/data/SSE_CBOMS"]
+
+  target-modules:
+    image: ${CBOM_CATALOG_IMAGE:-cbom-catalog:local}
+    build:
+      context: .
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+    profiles: ["tools"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      PGHOST: ${DATABASE_HOST:-postgres}
+      PGPORT: ${DATABASE_PORT:-5432}
+      PGDATABASE: ${POSTGRES_DB:-cbom_catalog}
+      PGUSER: ${POSTGRES_USER:-cbom}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-cbom_local_only}
+    volumes:
+      - ${CBOM_TARGET_MODULES_FILE:-../FIPS-140-3-21-sept.json}:/data/target-modules.json:ro
+    command: ["cbom-catalog", "import-target-modules", "/data/target-modules.json"]
+
+  target-public-evidence:
+    image: ${CBOM_CATALOG_IMAGE:-cbom-catalog:local}
+    build:
+      context: .
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+    profiles: ["tools"]
+    depends_on:
+      target-modules:
+        condition: service_completed_successfully
+    environment:
+      PGHOST: ${DATABASE_HOST:-postgres}
+      PGPORT: ${DATABASE_PORT:-5432}
+      PGDATABASE: ${POSTGRES_DB:-cbom_catalog}
+      PGUSER: ${POSTGRES_USER:-cbom}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-cbom_local_only}
+    volumes:
+      - ${CBOM_PUBLIC_EVIDENCE_FILE:-./evidence/fips-module-public-evidence-2026-09-21.json}:/data/public-evidence.json:ro
+    command: ["cbom-catalog", "import-target-evidence", "/data/public-evidence.json"]
+
+  target-catalog-evidence:
+    image: ${CBOM_CATALOG_IMAGE:-cbom-catalog:local}
+    build:
+      context: .
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+    profiles: ["tools"]
+    depends_on:
+      target-public-evidence:
+        condition: service_completed_successfully
+    environment:
+      PGHOST: ${DATABASE_HOST:-postgres}
+      PGPORT: ${DATABASE_PORT:-5432}
+      PGDATABASE: ${POSTGRES_DB:-cbom_catalog}
+      PGUSER: ${POSTGRES_USER:-cbom}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-cbom_local_only}
+    volumes:
+      - ${CBOM_CATALOG_CORRELATION_FILE:-./evidence/current-version-correlation-2026-09-21.json}:/data/catalog-evidence.json:ro
+    command: ["cbom-catalog", "import-catalog-claim-evidence", "/data/catalog-evidence.json"]
 
 volumes:
   postgres-data:

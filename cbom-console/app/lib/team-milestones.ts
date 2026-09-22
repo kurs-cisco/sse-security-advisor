@@ -7,6 +7,51 @@ export type TrackerMilestone = {
   date: string | null;
 };
 
+export type TargetModuleRecord = {
+  team?: string | null;
+  team_key?: string | null;
+  current_module: string | null;
+  current_version: string | null;
+  used_by: string | null;
+  target_module: string | null;
+  target_version?: string | null;
+  asserted_status: string | null;
+  normalized_status: string;
+  current_cmvp_cert: string | null;
+  target_cmvp_cert: string | null;
+  target_disposition: "active_certificate" | "cmvp_in_process" | "planned_unverified" | "not_supplied" | "not_applicable" | "not_determined";
+  disposition_basis: string;
+  reason: string | null;
+  evidence_grade: "user_asserted";
+  review_required: boolean;
+  record_sha256: string;
+  assertion_subject_sha256?: string | null;
+  verification?: {
+    current_inventory_match: { state: string; evidence_count: number };
+    target_public_status: { state: string; evidence_count: number };
+    public_authority_alignment: { state: string; evidence_count: number };
+    deployment_applicability: { state: string; evidence_count: number };
+    overall: { state: string; review_required: boolean };
+  };
+  evidence_summary?: {
+    evidence_count: number;
+    corroborates: number;
+    contradicts: number;
+    partial: number;
+    not_observed: number;
+    unresolved_requirements: string[];
+  };
+  evidence?: Array<{
+    evidence_id: number;
+    claim_field: string;
+    verdict: string;
+    source_kind: string;
+    source_title: string | null;
+    source_url: string | null;
+    source_payload_sha256: string;
+  }>;
+};
+
 export type TeamTrackerRow = {
   team: string;
   owner: string | null;
@@ -22,6 +67,7 @@ export type TeamTrackerRow = {
   };
   mapped_service_groups?: string[];
   source_teams?: string[];
+  target_modules?: TargetModuleRecord[];
 };
 
 export type PoamCandidate = {
@@ -93,6 +139,13 @@ export type ServiceScopeLink = {
     leads: string[];
     delivery_wave: Omit<DeliveryWave, "service_group_count" | "service_groups"> & { farthest_explicit_il2_date: string | null; raw_il2_values: string[] };
     tracker_rows: TeamTrackerRow[];
+    target_modules?: TargetModuleRecord[];
+    planning_source?: {
+      source_file?: string;
+      source_file_sha256?: string;
+      retrieved_on?: string | null;
+      evidence_grade?: "user_asserted";
+    };
     eta_inheritance: string;
   };
 };
@@ -114,6 +167,14 @@ export type PortfolioPoam = {
   affected_service_record_count: number;
   affected_libraries: Array<{ component_identity: string; name: string; version: string | null }>;
   affected_library_count: number;
+  target_modules?: TargetModuleRecord[];
+  target_module_count?: number;
+  target_module_source?: {
+    source_file?: string;
+    source_file_sha256?: string;
+    retrieved_on?: string | null;
+    evidence_grade?: "user_asserted";
+  } | null;
   service_scope_links: ServiceScopeLink[];
   milestone_deliverables: DeliveryWave[];
   unclassified_candidate_count: number;

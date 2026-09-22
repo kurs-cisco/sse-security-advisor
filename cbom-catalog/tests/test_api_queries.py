@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import unittest
 import io
 import json
+import unittest
 import zipfile
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -62,6 +62,7 @@ class ApiQueryTests(unittest.TestCase):
         }
         with (
             patch.object(api, "_fetch_all", side_effect=[[], [], []]) as fetch_all,
+            patch.object(api, "_active_target_module_contract", return_value=None),
             patch.object(api, "build_assessment", return_value=expected) as build,
         ):
             result = api._load_fips_assessment(
@@ -96,6 +97,7 @@ class ApiQueryTests(unittest.TestCase):
         expected = {"summary": {}, "poam_items": []}
         with (
             patch.object(api, "_fetch_all", side_effect=[[], [], []]),
+            patch.object(api, "_active_target_module_contract", return_value=None),
             patch.object(api, "build_assessment", return_value=expected) as build,
         ):
             result = api._load_fips_assessment(None, None)
@@ -139,6 +141,7 @@ class ApiQueryTests(unittest.TestCase):
             patch.object(api, "render_portfolio_poam_csv", return_value="portfolio\r\n"),
             patch.object(api, "render_workstream_csv", return_value="workstream\r\n"),
             patch.object(api, "team_milestones", return_value={"source": {"source_file_sha256": "abc"}}),
+            patch.object(api, "_active_target_module_contract", return_value=None),
         ):
             response = api.fips_compliance_package_export("collection-a", None)
 

@@ -42,6 +42,39 @@ function inventoryLink(view: "services" | "libraries", query: string) {
   return `/inventory?view=${view}&query=${encodeURIComponent(query)}`;
 }
 
+function dispositionLabel(value: string) {
+  return value === "active_certificate" ? "Active certificate target" :
+    value === "cmvp_in_process" ? "CMVP in test / progress" :
+      value.replaceAll("_", " ");
+}
+
+function verificationLabel(value: string | undefined) {
+  return (value || "not_assessable").replaceAll("_", " ");
+}
+
+function verificationTone(value: string | undefined): "success" | "warning" | "danger" | "neutral" {
+  if (value === "corroborated") return "success";
+  if (value === "contradicted" || value === "conflicting_evidence") return "danger";
+  if (value === "partially_corroborated" || value === "not_observed") return "warning";
+  return "neutral";
+}
+
+function TargetModuleList({ modules }: { modules: NonNullable<PortfolioPoam["target_modules"]> }) {
+  if (!modules.length) return <p className="poam-muted">No target-module mapping supports this dimension.</p>;
+  return <div className="poam-target-modules">{modules.map((module, index) => <article key={module.record_sha256 || `${module.team}-${module.current_module}-${index}`}>
+    <div><strong>{module.team || "Team not supplied"}</strong><Badge tone={module.target_disposition === "active_certificate" ? "success" : module.target_disposition === "cmvp_in_process" ? "warning" : "neutral"}>{dispositionLabel(module.target_disposition)}</Badge></div>
+    <p><span>{module.current_module || "Current module not supplied"}{module.current_version ? ` @ ${module.current_version}` : ""}</span><b>→</b><span>{module.target_module || "Target module not supplied"}</span></p>
+    <small>{module.target_cmvp_cert || module.current_cmvp_cert ? `Asserted certificate: ${module.target_cmvp_cert || module.current_cmvp_cert}` : "Certificate not supplied"} · {module.asserted_status || "Status not supplied"}</small>
+    <small>{module.disposition_basis}</small>
+    <div className="poam-verification-grid">
+      <span><b>CBOM inventory</b><Badge tone={verificationTone(module.verification?.current_inventory_match?.state)}>{verificationLabel(module.verification?.current_inventory_match?.state)}</Badge></span>
+      <span><b>Authority evidence</b><Badge tone={verificationTone(module.verification?.public_authority_alignment?.state)}>{verificationLabel(module.verification?.public_authority_alignment?.state)}</Badge></span>
+      <span><b>Deployment</b><Badge tone="neutral">not assessable</Badge></span>
+    </div>
+    {module.evidence_summary?.evidence_count ? <a className="poam-evidence-link" href={`/api/v1/fips/target-modules/${module.record_sha256}/evidence`} target="_blank" rel="noreferrer">{module.evidence_summary.evidence_count} evidence record{module.evidence_summary.evidence_count === 1 ? "" : "s"}<ExternalLink size={12} /></a> : <small>No corroborating evidence record loaded</small>}
+  </article>)}</div>;
+}
+
 function ScopeLinks({ links }: { links: ServiceScopeLink[] }) {
   if (!links.length) return <p className="poam-muted">No document-level scope links were resolved.</p>;
   return <div className="poam-scope-links">{links.map((link) => <article key={`${link.document_id}-${link.service_group_ref}-${link.subject_identity}`}>
@@ -49,6 +82,7 @@ function ScopeLinks({ links }: { links: ServiceScopeLink[] }) {
     <p className="mono poam-scope-subject">{link.subject_name}</p>
     <div className="poam-scope-meta"><span><b>Owner</b>{link.planning?.owners.join(" / ") || "Not supplied"}</span><span><b>Lead</b>{link.planning?.leads.join(" / ") || "Not supplied"}</span><span><b>Delivery wave</b>{link.planning?.delivery_wave.label || "Uncommitted"}</span><span><b>Group IL2</b><DateOrGap date={link.planning?.delivery_wave.farthest_explicit_il2_date} /></span></div>
     {link.libraries.length ? <div className="poam-library-links">{link.libraries.map((library, index) => <a key={`${library.component_identity}-${library.occurrence_id}-${index}`} href={inventoryLink("libraries", library.name)}><FlaskConical size={13} />{library.name}{library.version ? ` @ ${library.version}` : ""}</a>)}</div> : <span className="poam-missing">No component-level library link</span>}
+    {link.planning?.target_modules?.length ? <details className="poam-scope-targets"><summary>{link.planning.target_modules.length} team target-module record{link.planning.target_modules.length === 1 ? "" : "s"}</summary><TargetModuleList modules={link.planning.target_modules} /></details> : null}
     <small className="poam-eta-note">{link.planning?.eta_inheritance || "ETA mapping not supplied"}</small>
   </article>)}</div>;
 }
@@ -59,12 +93,12 @@ function PortfolioRow({ item }: { item: PortfolioPoam }) {
   return <>
     <tr>
       <td><button type="button" className="poam-expand" onClick={() => setOpen((value) => !value)} aria-expanded={open}><ChevronDown size={17} className={cn(open && "poam-chevron-open")} /><span className="mono">{item.portfolio_poam_id}</span></button><strong>{item.title}</strong><small>{isActive ? "Active-certificate migration dimension" : "CMVP pipeline dependency dimension"}</small></td>
-      <td><strong>{item.linked_candidate_count} linked asset candidate{item.linked_candidate_count === 1 ? "" : "s"}</strong><small>{item.affected_service_record_count} service records · {item.affected_library_count} libraries</small></td>
+      <td><strong>{item.linked_candidate_count} linked asset candidate{item.linked_candidate_count === 1 ? "" : "s"}</strong><small>{item.affected_service_record_count} service records · {item.affected_library_count} libraries · {item.target_module_count ?? 0} target modules</small></td>
       <td><span>{item.responsible_owners.join(" / ") || "Not supplied"}</span><small>{item.affected_service_groups.map(serviceGroupLabel).join(", ") || "No defensible mapping yet"}</small></td>
       <td><DateOrGap date={item.scheduled_completion_date} /><small>Farthest explicit linked-group IL2</small></td>
       <td><Badge tone="warning">Assessor merge review</Badge><small>{item.unclassified_candidate_count} candidates remain unclassified</small></td>
     </tr>
-    {open ? <tr className="poam-detail-row"><td colSpan={5}><div className="poam-portfolio-detail"><div className="poam-portfolio-summary"><div><p className="eyebrow">Candidate condition</p><p>{item.condition}</p></div><div><p className="eyebrow">Milestone deliverables</p><div className="poam-wave-list">{item.milestone_deliverables.filter((wave) => wave.wave !== "uncommitted").map((wave) => <span key={wave.wave}><strong>{wave.label}</strong>{wave.service_groups.map((group) => serviceGroupDisplayName(group.service_group)).join(", ") || "No linked groups"}</span>)}</div></div><div><p className="eyebrow">Merge confirmation gates</p><ul className="coverage-evidence-list">{item.merge_blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul></div></div><ScopeLinks links={item.service_scope_links} /></div></td></tr> : null}
+    {open ? <tr className="poam-detail-row"><td colSpan={5}><div className="poam-portfolio-detail"><div className="poam-portfolio-summary"><div><p className="eyebrow">Candidate condition</p><p>{item.condition}</p></div><div><p className="eyebrow">Milestone deliverables</p><div className="poam-wave-list">{item.milestone_deliverables.filter((wave) => wave.wave !== "uncommitted").map((wave) => <span key={wave.wave}><strong>{wave.label}</strong>{wave.service_groups.map((group) => serviceGroupDisplayName(group.service_group)).join(", ") || "No linked groups"}</span>)}</div></div><div><p className="eyebrow">Merge confirmation gates</p><ul className="coverage-evidence-list">{item.merge_blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul></div></div><div><p className="eyebrow">Target-module basis</p><TargetModuleList modules={item.target_modules ?? []} />{item.target_module_source?.source_file_sha256 ? <small className="mono poam-source-hash">Source SHA-256: {item.target_module_source.source_file_sha256}</small> : null}</div><ScopeLinks links={item.service_scope_links} /></div></td></tr> : null}
   </>;
 }
 
@@ -184,6 +218,6 @@ export function PoamWorkbench() {
       <motion.section className="poam-kpis" aria-label="Assessment summary" initial={{ opacity: 0, y: reducedMotion ? 0 : 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reducedMotion ? 0 : .22 }}><Card><ListTree size={20} /><div><span>Issue workstreams</span><strong>{workstreams.length}</strong></div></Card><Card><ClipboardCheck size={20} /><div><span>Asset candidates</span><strong>{assessment.summary.deduplicated_poam_candidates}</strong></div></Card><Card><FileWarning size={20} /><div><span>Evidence gaps</span><strong>{assessment.summary.needs_review_findings}</strong></div></Card><Card><CalendarClock size={20} /><div><span>Coverage requests</span><strong>{coverageGaps.length}</strong></div></Card></motion.section>
     </> : null}
 
-    {milestones?.data ? <Card className="poam-milestone-card"><details><summary><span><span className="eyebrow">Team Tracker planning data</span><strong>Owner, lead, IL2, and IL5 milestone register</strong></span><span className="poam-summary-actions"><DisclosureInfo label="Milestone date rules" text="Planning metadata only. Relative phrases are ignored; only explicit IL2 dates can become candidate mitigation dates." /><Badge tone="info">{milestones.data.all_tracker_rows.length} tracker rows</Badge></span></summary><div className="poam-milestone-scroll"><table><thead><tr><th>Team</th><th>Mapped service groups</th><th>Owner</th><th>Lead</th><th>IL2</th><th>IL5</th></tr></thead><tbody>{milestones.data.all_tracker_rows.map((row) => <tr key={row.team}><td><strong>{row.team}</strong></td><td>{row.mapped_service_groups?.join(", ") || <span className="poam-missing">Unmapped</span>}</td><td>{row.owner || <span className="poam-missing">Not supplied</span>}</td><td>{row.lead || <span className="poam-missing">Not supplied</span>}</td><td>{milestoneText(row.il2)}</td><td>{milestoneText(row.il5)}</td></tr>)}</tbody></table></div></details></Card> : null}
+    {milestones?.data ? <Card className="poam-milestone-card"><details><summary><span><span className="eyebrow">Team target-module planning data</span><strong>Owner, lead, target state, IL2, and IL5 milestone register</strong></span><span className="poam-summary-actions"><DisclosureInfo label="Milestone and module rules" text="Planning metadata only. Relative phrases are ignored; only explicit IL2 dates can become candidate mitigation dates. Asserted status and certificate values still require exact deployment correlation." /><Badge tone="info">{milestones.data.all_tracker_rows.length} tracker rows</Badge></span></summary><div className="poam-milestone-scroll"><table><thead><tr><th>Team</th><th>Mapped service groups</th><th>Owner</th><th>Lead</th><th>Target state</th><th>IL2</th><th>IL5</th></tr></thead><tbody>{milestones.data.all_tracker_rows.map((row) => <tr key={row.team}><td><strong>{row.team}</strong></td><td>{row.mapped_service_groups?.join(", ") || <span className="poam-missing">Unmapped</span>}</td><td>{row.owner || <span className="poam-missing">Not supplied</span>}</td><td>{row.lead || <span className="poam-missing">Not supplied</span>}</td><td>{row.target_modules?.length ? <div className="poam-target-state">{Array.from(new Set(row.target_modules.map((module) => module.target_disposition))).map((status) => <Badge key={status} tone={status === "active_certificate" ? "success" : status === "cmvp_in_process" ? "warning" : "neutral"}>{dispositionLabel(status)}</Badge>)}</div> : <span className="poam-missing">Not determined</span>}</td><td>{milestoneText(row.il2)}</td><td>{milestoneText(row.il5)}</td></tr>)}</tbody></table></div></details></Card> : null}
   </div></ConsoleShell>;
 }

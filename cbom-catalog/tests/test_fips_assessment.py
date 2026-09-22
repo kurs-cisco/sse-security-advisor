@@ -573,14 +573,6 @@ class FipsAssessmentTests(unittest.TestCase):
         self.assertIn("dlp.json", csv_output)
 
     def test_poam_uses_farthest_explicit_il2_date_only(self) -> None:
-        result = build_assessment(
-            [document(1, "CNHE"), document(2, "DW-VOLT")],
-            [
-                observation(1, "fedramp:fips-level", "FIPS 140-2", evidence_id=60),
-                observation(2, "fedramp:fips-level", "FIPS 140-2", evidence_id=61),
-            ],
-            as_of=date(2026, 9, 18),
-        )
         # Different document subjects may produce separate dedupe rows; enrich
         # a deliberately combined candidate to exercise the cross-group rule.
         item = {"affected_services": ["sse-cboms/CNHE", "sse-cboms/DW-VOLT"]}
