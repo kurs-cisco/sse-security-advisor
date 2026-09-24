@@ -67,10 +67,10 @@ _TEAM_ROWS: dict[str, dict[str, Any]] = {
     "OVD-APP-DISCOVERY": {"team": "OVD- APP-Discovery", "owner": "Avnish", "lead": "Udhandaraman Velayutham", "il2": "30th SEPT", "il5": "30th SEPT"},
     "VA": {"team": "VA", "owner": "Avnish", "lead": "Sandeep Kumar T.K.", "il2": "March 2027", "il5": "March 2027"},
     "ANDROID": {"team": "Android", "owner": "Avnish", "lead": "Dinesh Upreti / Amarnath Jiyawan", "il2": "NA (Play Store)", "il5": "NA (Play Store)"},
-    "FROUTER": {"team": "Frouter", "owner": "Ashok", "lead": "Joel Ahn", "il2": "", "il5": ""},
+    "FROUTER": {"team": "Frouter", "owner": "Ashok", "lead": "Joel Ahn", "il2": "Done", "il5": ""},
     "ON-PREM-CLIENTS": {"team": "On Prem/Clients", "owner": "", "lead": "", "il2": "", "il5": ""},
     "ADC": {"team": "ADC", "owner": "Avnish", "lead": "Sandeep Kumar T. K.", "il2": "15 Jan 2027", "il5": "15 Jan 2027"},
-    "SWG-ROAMING-CLIENT": {"team": "Roaming SWG Client", "owner": "Avnish", "lead": "Dinesh Upreti / Sriraksha Shantharam", "il2": "", "il5": ""},
+    "SWG-ROAMING-CLIENT": {"team": "Roaming SWG Client", "owner": "Avnish", "lead": "Dinesh Upreti / Sriraksha Shantharam", "il2": "Done", "il5": ""},
     "RSM-SECURE-CLIENT": {"team": "RSM/Secure Client", "owner": "John", "lead": "Erik Peterson", "il2": "", "il5": ""},
     "IOS": {"team": "iOS", "owner": "John", "lead": "Erik Peterson", "il2": "", "il5": ""},
 }
