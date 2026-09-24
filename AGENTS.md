@@ -15,6 +15,10 @@ that a module is FIPS validated.
 
 - Treat source corpora as read-only evidence. Use the checksum-gated ingester;
   never rewrite source documents during normalization.
+- Cloud corpus additions must use the administrator ingestion control plane:
+  checksum manifest, direct presigned upload to temporary private S3, and an
+  asynchronous ECS task. Do not proxy raw corpus bytes through FastAPI.
+- Use dry-run ingestion for flow and data comparisons before a committed job.
 - Scope catalog identity by `(source_collection, service_group)` and preserve
   exact source/document SHA-256 values.
 - Use `--authoritative-snapshot` only for a complete collection snapshot; a
@@ -25,7 +29,8 @@ that a module is FIPS validated.
   representative API checks, and browser flows in
   `cbom-catalog/docs/RELEASE_CHECKLIST.md`.
 - Never commit database dumps, `.env` files, credentials, OIDC secrets, or raw
-  externally shared assessment packages.
+  externally shared assessment packages. Shared snapshots must exclude the
+  entire `app_auth` schema, including ingestion job metadata.
 
 See `.agents/README.md` and
 `cbom-catalog/docs/INGESTION_AND_ASSESSMENT.md` for the durable knowledge map.

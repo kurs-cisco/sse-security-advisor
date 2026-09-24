@@ -3,7 +3,7 @@ import { fetchJson } from "@/app/lib/http";
 export type TrackerMilestone = {
   label: "IL2" | "IL5";
   raw_value: string;
-  status: "date" | "partial_date" | "not_supplied" | "not_applicable" | "unparseable_or_relative";
+  status: "date" | "done" | "vendor_dependency" | "partial_date" | "not_supplied" | "not_applicable" | "unparseable_or_relative";
   date: string | null;
 };
 

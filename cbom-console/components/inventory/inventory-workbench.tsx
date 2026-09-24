@@ -26,7 +26,7 @@ const statusStyles: Record<InventoryStatus, string> = {
 };
 
 function StatusPill({ status }: { status: InventoryStatus }) {
-  const label = status === "needs-evidence" ? "Evidence needed" : status === "no-data" ? "No catalog data" : status === "ready" ? "Evidence present" : "Attention";
+  const label = status === "needs-evidence" ? "Evidence requested" : status === "no-data" ? "No parsed records" : status === "ready" ? "No coverage request" : "Ingest attention";
   return <span className={`inline-flex whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-medium ${statusStyles[status]}`}>{label}</span>;
 }
 
@@ -45,10 +45,11 @@ function numericId(value: string) { return Number(value.split("-").at(-1)); }
 const groupColumns: ColumnDef<ServiceGroupInventory>[] = [
   { accessorKey: "group", header: "Service group", cell: ({ row }) => <span className="font-medium text-foreground">{row.original.group}</span> },
   { accessorKey: "documents", header: "Records", cell: ({ row }) => <span className="font-mono">{row.original.documents}</span> },
-  { accessorKey: "services", header: "Services", cell: ({ row }) => <span className="font-mono">{row.original.services}</span> },
+  { accessorKey: "sourceFiles", header: "Source files", cell: ({ row }) => <span className="font-mono">{row.original.sourceFiles}</span> },
   { accessorKey: "cryptoComponents", header: "Crypto components", cell: ({ row }) => <span className="font-mono">{row.original.cryptoComponents}</span> },
   { accessorKey: "uniqueLibraries", header: "Unique libraries", cell: ({ row }) => <span className="font-mono">{row.original.uniqueLibraries}</span> },
-  { accessorKey: "evidenceGaps", header: "Evidence gaps", cell: ({ row }) => <span className="font-mono">{row.original.evidenceGaps}</span> },
+  { accessorKey: "evidenceGaps", header: "Coverage requests", cell: ({ row }) => <span className="font-mono">{row.original.evidenceGaps}</span> },
+  { accessorKey: "ingestIssues", header: "Ingest issues", cell: ({ row }) => <span className="font-mono">{row.original.ingestIssues}</span> },
   { accessorKey: "status", header: "Posture", cell: ({ row }) => <StatusPill status={row.original.status} /> },
 ];
 
@@ -134,7 +135,8 @@ export function InventoryWorkbench() {
   }, [activeView, libraryPage, libraryPageSize, libraryQuery, librarySort, libraryDirection]);
   const totalCrypto = groups.reduce((sum, group) => sum + group.cryptoComponents, 0);
   const noData = groups.filter((group) => group.status === "no-data").length;
-  const evidenceNeeded = groups.filter((group) => group.status === "needs-evidence" || group.status === "attention").length;
+  const evidenceNeeded = groups.filter((group) => group.evidenceGaps > 0).length;
+  const ingestAttention = groups.filter((group) => group.ingestIssues > 0).length;
 
   const serviceColumns = React.useMemo<ColumnDef<ServiceInventory>[]>(() => [
     { accessorKey: "service", header: "Service", cell: ({ row }) => <div><p className="font-medium text-foreground">{row.original.service}</p><p className="mt-1 font-mono text-xs text-muted-foreground">{row.original.id}</p></div> },
@@ -179,7 +181,8 @@ export function InventoryWorkbench() {
     <section className="inventory-summary-grid" aria-label="Inventory summary">
       <SummaryMetric icon={Boxes} label="Catalog records" value={groups.reduce((sum, group) => sum + group.documents, 0).toLocaleString()} detail="Parsed service evidence" />
       <SummaryMetric icon={LibraryBig} label="Crypto occurrences" value={totalCrypto.toLocaleString()} detail="Candidate inventory" />
-      <SummaryMetric icon={CircleAlert} label="Groups needing review" value={String(evidenceNeeded)} detail="Evidence or ingestion gaps" />
+      <SummaryMetric icon={CircleAlert} label="Groups needing evidence" value={String(evidenceNeeded)} detail="POA&M coverage requests" />
+      <SummaryMetric icon={FileWarning} label="Groups with ingest issues" value={String(ingestAttention)} detail="Parser and ingestion quality" />
       <SummaryMetric icon={ShieldAlert} label="Empty categories" value={String(noData)} detail="Registered groups without current files" />
     </section>
     </> : null}
@@ -193,9 +196,9 @@ function CoverageView({ groups }: { groups: ServiceGroupInventory[] }) {
   const visibleHeatmap = [...groups].sort((a, b) => b.cryptoComponents - a.cryptoComponents).filter((group, index) => index < 12 || group.status === "no-data");
   const maxCrypto = Math.max(...visibleHeatmap.map((group) => group.cryptoComponents), 1);
   return <section className="inventory-primary-view">
-    <SectionHeading icon={Boxes} title="Service-group matrix" description="Sort and filter the complete portfolio by coverage, candidate crypto volume, format, or evidence posture." />
+    <SectionHeading icon={Boxes} title="Service-group matrix" description="Sort and filter the complete portfolio by parsed records, source files, candidate crypto volume, coverage requests, or ingestion quality." />
     <InventoryDataTable columns={groupColumns} data={groups} filterColumn="group" searchPlaceholder="Search service groups…" />
-    <div className="coverage-heatmap-card"><SectionHeading icon={Layers3} title="Coverage heatmap" description="Top candidate-crypto footprints plus every empty category. Intensity is volume, not compliance." /><div className="coverage-heatmap-grid">{visibleHeatmap.map((group) => { const amount = Math.max(3, Math.round((group.cryptoComponents / maxCrypto) * 100)); return <article key={group.group} className="heatmap-tile"><div className="heatmap-tile-heading"><strong>{group.group}</strong><StatusPill status={group.status} /></div><div className="heatmap-values"><div><strong>{group.cryptoComponents.toLocaleString()}</strong><span>crypto occurrence{group.cryptoComponents === 1 ? "" : "s"}</span></div><p>{group.services} service{group.services === 1 ? "" : "s"} · {group.uniqueLibraries} librar{group.uniqueLibraries === 1 ? "y" : "ies"}</p></div><div className="heatmap-track"><span style={{ width: `${amount}%` }} /></div></article>; })}</div></div>
+    <div className="coverage-heatmap-card"><SectionHeading icon={Layers3} title="Coverage heatmap" description="Top candidate-crypto footprints plus every empty category. Intensity is volume, not compliance." /><div className="coverage-heatmap-grid">{visibleHeatmap.map((group) => { const amount = Math.max(3, Math.round((group.cryptoComponents / maxCrypto) * 100)); return <article key={group.group} className="heatmap-tile"><div className="heatmap-tile-heading"><strong>{group.group}</strong><StatusPill status={group.status} /></div><div className="heatmap-values"><div><strong>{group.cryptoComponents.toLocaleString()}</strong><span>crypto occurrence{group.cryptoComponents === 1 ? "" : "s"}</span></div><p>{group.sourceFiles} source file{group.sourceFiles === 1 ? "" : "s"} · {group.uniqueLibraries} librar{group.uniqueLibraries === 1 ? "y" : "ies"}</p></div><div className="heatmap-track"><span style={{ width: `${amount}%` }} /></div></article>; })}</div></div>
   </section>;
 }
 

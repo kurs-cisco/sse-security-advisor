@@ -3,10 +3,11 @@ export type InventoryStatus = "ready" | "needs-evidence" | "no-data" | "attentio
 export type ServiceGroupInventory = {
   group: string;
   documents: number;
-  services: number;
+  sourceFiles: number;
   cryptoComponents: number;
   uniqueLibraries: number;
   evidenceGaps: number;
+  ingestIssues: number;
   formats: string[];
   status: InventoryStatus;
 };

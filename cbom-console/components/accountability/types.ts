@@ -1,4 +1,4 @@
-export type PlanningState = "dated" | "not_supplied" | "not_applicable" | "non_date";
+export type PlanningState = "dated" | "done" | "vendor_dependency" | "not_supplied" | "not_applicable" | "non_date";
 
 export type PlanningSummary = {
   state: PlanningState;
@@ -44,6 +44,7 @@ export type ServiceGroupRegisterRow = {
   review_observations: number;
   finding_count: number;
   coverage_gap_states: string[];
+  coverage_gap_count: number;
   poam_candidate_ids: string[];
   poam_candidate_count: number;
   workstream_ids: string[];
@@ -181,7 +182,7 @@ export type ServiceGroupDetail = {
   profile: ServiceGroupRegisterRow;
   tracker: {
     profile: TrackerProfile;
-    source: { source_file?: string; source_file_sha256?: string; observed_at?: string; url?: string };
+    source: { source?: string; source_file?: string; source_file_sha256?: string; source_commit?: string; observed_at?: string; url?: string };
     disclaimer: string;
   };
   documents: { items: CatalogDocument[]; total: number; limit: number; offset: number };

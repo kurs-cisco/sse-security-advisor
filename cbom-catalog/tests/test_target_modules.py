@@ -14,12 +14,18 @@ class TargetModuleTests(unittest.TestCase):
 
         result = parse_target_module_payload(payload)
 
-        self.assertEqual(result["retrieved"], "2026-09-21")
+        self.assertEqual(result["retrieved"], "2026-09-24")
         self.assertEqual(len(result["teams"]), 39)
         self.assertEqual(len(result["records"]), 76)
         self.assertEqual(len({row["team_key"] for row in result["teams"]}), 39)
         self.assertTrue(all(row["evidence_grade"] == "user_asserted" for row in result["records"]))
         self.assertTrue(all(row["review_required"] for row in result["records"]))
+        teams = {row["team_key"]: row for row in result["teams"]}
+        self.assertEqual(teams["OPC"]["il2_raw"], "Done")
+        self.assertEqual(teams["CONTRAAST"]["il2_raw"], "6-Oct-2026")
+        self.assertEqual(teams["KNEX"]["il5_raw"], "4-Nov-2026")
+        self.assertEqual(teams["VA"]["il2_raw"], "15-Dec-2026")
+        self.assertEqual(teams["RSM-SECURE-CLIENT"]["il2_raw"], "31-Mar-2027")
 
     def test_pending_status_is_not_upgraded_by_certificate(self) -> None:
         payload = {

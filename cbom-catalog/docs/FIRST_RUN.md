@@ -37,6 +37,13 @@ The example environment points `CBOM_CORPUS_ROOT` at
 that value when the corpus lives elsewhere. Keep `CBOM_SOURCE_COLLECTION`
 stable across refreshes of the same logical dataset.
 
+This local path is the supported bootstrap/refresh workflow. In cloud mode,
+use the administrator ingestion workspace or scoped API client: submit a
+checksum manifest, upload files directly to private S3, and let the one-off ECS
+task validate and ingest them. Do not send raw corpus bytes through FastAPI or
+commit them to the repository. Local click-through authentication can inspect
+job history but cannot launch a cloud task.
+
 Open <http://127.0.0.1:3000>, then select **Continue in local development**.
 Useful operational endpoints are:
 
@@ -88,8 +95,9 @@ docker compose logs --no-color --tail=100 api web
 
 In the browser, verify login, Overview, Inventory, Accountability, POA&M,
 service/document drawers, filters, pagination, theme switching, and all three
-POA&M downloads. Use [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for the full
-acceptance pass.
+POA&M downloads. In a provisioned cloud environment, also verify Admin role
+visibility and the dry-run ingestion status/log/result flow. Use
+[RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for the full acceptance pass.
 
 ## Stop and reset
 

@@ -98,6 +98,7 @@ deletion and raw-source distribution remain operator workflows. See
 
 Use [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md). At minimum, run console lint,
 non-incremental typecheck, production build, API tests, and real-browser checks
-for all four views, drawers, filters, pagination, themes, responsive navigation,
-and exports. Production verification must not show HMR or React development
+for the four primary read views plus the authorized Admin workspace, drawers,
+filters, pagination, themes, responsive navigation, exports, and a dry-run
+ingestion job. Production verification must not show HMR or React development
 tooling.

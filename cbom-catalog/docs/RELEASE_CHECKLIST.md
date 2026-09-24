@@ -66,7 +66,8 @@ assessment paging, issues, and all three exports.
 - [ ] Candidate and evidence-gap labels remain visible and distinct.
 - [ ] No output claims compliance, validation, closure, acceptance, or an AO
       decision based only on catalog evidence.
-- [ ] Team Tracker source checksum and mapping exceptions are current.
+- [ ] The active target-module import checksum matches the authoritative PR #1
+      planning payload; `done` and `vendor_dependency` remain planning states.
 - [ ] IL2 mitigation dates use the farthest explicit IL2 date; IL5 stays context.
 - [ ] Asset-level candidate evidence remains available beneath workstreams.
 - [ ] Snapshot checksum and manifest are present and match the restored copy.

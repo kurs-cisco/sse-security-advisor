@@ -9,10 +9,19 @@ export type InventorySnapshot =
   | { groups: ServiceGroupInventory[]; source: "api"; error?: never }
   | { groups: []; source: "unavailable"; error: string };
 
-type ApiGroup = { slug: string; display_name: string; source_files: number; unique_documents: number; issues: number; crypto_component_occurrences?: number; unique_crypto_components?: number; unique_crypto_libraries?: number };
+type ApiGroup = {
+  service_group: string;
+  display_name: string;
+  source_files: number;
+  documents: number;
+  coverage_gap_count: number;
+  ingest_issues: number;
+  crypto_component_occurrences?: number;
+  candidate_crypto_assets?: number;
+  candidate_crypto_libraries?: number;
+};
 type ApiDocument = { document_id: number; sha256: string; document_kind: string; format_name: string; spec_version: string; generated_at_text: string | null; service_groups: string[]; source_paths: string[]; crypto_component_occurrences?: number; unique_crypto_libraries?: number };
 type ApiComponent = { component_id: number; name: string; version: string | null; canonical_purl: string | null; document_count: number; occurrence_count?: number; service_groups: string[] };
-type ApiOverview = { service_groups?: ApiGroup[] };
 
 function baseName(path: string | undefined) { return path?.split("/").at(-1)?.replace(/\.json$/i, "") || "Untitled record"; }
 function documentStatus(document: ApiDocument): InventoryStatus { return document.document_kind ? "ready" : "needs-evidence"; }
@@ -35,14 +44,15 @@ function mapDocument(document: ApiDocument): ServiceInventory {
 
 function mapGroups(groups: ApiGroup[]): ServiceGroupInventory[] {
   return groups.map((group) => ({
-      group: serviceGroupDisplayName(group.display_name || group.slug),
-      documents: group.unique_documents ?? 0,
-      services: group.unique_documents ?? 0,
+      group: serviceGroupDisplayName(group.display_name || group.service_group),
+      documents: group.documents ?? 0,
+      sourceFiles: group.source_files ?? 0,
       cryptoComponents: group.crypto_component_occurrences ?? 0,
-      uniqueLibraries: group.unique_crypto_libraries ?? 0,
-      evidenceGaps: group.issues ?? 0,
+      uniqueLibraries: group.candidate_crypto_libraries ?? 0,
+      evidenceGaps: group.coverage_gap_count ?? 0,
+      ingestIssues: group.ingest_issues ?? 0,
       formats: [],
-      status: group.source_files === 0 ? "no-data" : group.issues > 0 ? "attention" : "ready",
+      status: group.documents === 0 ? "no-data" : group.coverage_gap_count > 0 ? "needs-evidence" : group.ingest_issues > 0 ? "attention" : "ready",
     } satisfies ServiceGroupInventory));
 }
 
@@ -65,8 +75,8 @@ function mapLibrary(component: ApiComponent): LibraryInventory {
 /** Uses deployed FastAPI endpoints and never substitutes demo inventory on request failure. */
 export async function getInventorySnapshot(): Promise<InventorySnapshot> {
   try {
-    const overview = await fetchJson<ApiOverview>("/api/v1/dashboard/overview");
-    return { groups: mapGroups(overview.service_groups ?? []), source: "api" };
+    const register = await fetchJson<ApiPage<ApiGroup>>("/api/v1/inventory/service-groups?limit=250&sort=service_group&direction=asc");
+    return { groups: mapGroups(register.items ?? []), source: "api" };
   } catch (error) {
     return {
       groups: [],

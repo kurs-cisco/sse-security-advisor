@@ -17,6 +17,13 @@ SHA-256 provenance, Team Tracker milestones, and a scoped FIPS 140-3
 transition/POA&M candidate view. The legacy workbench remains at
 <http://localhost:8000/ui/> as a rollback surface.
 
+In cloud mode, application administrators can start checksum-manifested corpus
+imports from **Admin**. The browser hashes the selected files and uploads them
+directly to temporary private S3 objects through presigned `PUT` URLs; FastAPI
+handles only manifest/job control, and a one-off ECS task validates every
+checksum before a dry-run comparison or committed ingest. Raw corpus packages
+must not be proxied synchronously through FastAPI or committed to Git.
+
 See the console [README](cbom-console/README.md) for its development,
 verification, and container workflow.
 Cloud OIDC configuration, the read-only NOTA/AWS reuse assessment, and the

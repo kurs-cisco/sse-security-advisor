@@ -428,6 +428,31 @@ def _make_finding(
     }
 
 
+def _dedupe_findings(findings: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse repeated classifier emissions that resolve to one stable finding ID.
+
+    A document can repeat an equivalent component assertion across occurrences. The
+    public evidence key intentionally ignores database occurrence IDs, so those rows
+    are one candidate fact, not multiple findings. Preserve the duplicate count for
+    auditability while presenting one finding everywhere downstream.
+    """
+    unique: dict[str, dict[str, Any]] = {}
+    for finding in findings:
+        finding_id = str(finding["finding_id"])
+        existing = unique.get(finding_id)
+        if existing is None:
+            unique[finding_id] = {**finding, "duplicate_occurrence_count": 1}
+            continue
+        existing["duplicate_occurrence_count"] += 1
+        existing["affected_services"] = sorted(
+            {*existing.get("affected_services", []), *finding.get("affected_services", [])}
+        )
+    return sorted(
+        unique.values(),
+        key=lambda item: (item["rule_id"], item["subject_name"], item["finding_id"]),
+    )
+
+
 def _eligible_component_observations(
     observations: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -1082,7 +1107,7 @@ def build_assessment(
         findings.extend(document_findings)
         signal_by_document[document_id] = signals
 
-    findings.sort(key=lambda item: (item["rule_id"], item["subject_name"], item["finding_id"]))
+    findings = _dedupe_findings(findings)
     poam_items = _build_poam_items(findings)
 
     service_rollups: dict[str, dict[str, Any]] = {}
@@ -1101,8 +1126,8 @@ def build_assessment(
             "ingest_issues": int(inventory_row.get("ingest_issues") or 0),
             "documents": 0,
             "documents_with_fips_evidence": 0,
-            "poam_candidate_findings": 0,
-            "needs_review_findings": 0,
+            "poam_candidate_finding_ids": set(),
+            "needs_review_finding_ids": set(),
             "finding_ids": set(),
         }
     for document_id, document in documents_by_id.items():
@@ -1122,8 +1147,8 @@ def build_assessment(
                     "ingest_issues": 0,
                     "documents": 0,
                     "documents_with_fips_evidence": 0,
-                    "poam_candidate_findings": 0,
-                    "needs_review_findings": 0,
+                    "poam_candidate_finding_ids": set(),
+                    "needs_review_finding_ids": set(),
                     "finding_ids": set(),
                 },
             )
@@ -1133,14 +1158,20 @@ def build_assessment(
             for finding in doc_findings:
                 rollup["finding_ids"].add(finding["finding_id"])
                 if finding["poam_eligible"]:
-                    rollup["poam_candidate_findings"] += 1
+                    rollup["poam_candidate_finding_ids"].add(finding["finding_id"])
                 else:
-                    rollup["needs_review_findings"] += 1
+                    rollup["needs_review_finding_ids"].add(finding["finding_id"])
 
     rollups = []
     for key in sorted(service_rollups):
         rollup = service_rollups[key]
         rollup["finding_count"] = len(rollup.pop("finding_ids"))
+        rollup["poam_candidate_findings"] = len(
+            rollup.pop("poam_candidate_finding_ids")
+        )
+        rollup["needs_review_findings"] = len(
+            rollup.pop("needs_review_finding_ids")
+        )
         rollup["documents_without_fips_evidence"] = (
             rollup["documents"] - rollup["documents_with_fips_evidence"]
         )

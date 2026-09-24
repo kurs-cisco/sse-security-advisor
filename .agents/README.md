@@ -25,7 +25,14 @@ When changing assessment behavior, update together:
 4. [ingestion and assessment intelligence](../cbom-catalog/docs/INGESTION_AND_ASSESSMENT.md);
 5. POA&M/export documentation and the release checklist.
 
+The administrator ingestion control plane is operational infrastructure, not a
+new evidence grade or assessor authority. Changes to manifests, presigned S3
+uploads, ECS job execution, or `app_auth` ingestion metadata must preserve the
+specialist's read-only evidence assumptions and be reflected in the catalog
+ingestion contract, operations/data-model docs, console guidance, tests, and
+release checklist. Do not add transport or job-state rules to the FIPS skill
+unless they actually change assessment semantics.
+
 General coding and operational instructions remain in the root
 [`AGENTS.md`](../AGENTS.md). The Next.js-specific generated guidance remains in
 [`cbom-console/AGENTS.md`](../cbom-console/AGENTS.md).
-

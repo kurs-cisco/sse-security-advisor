@@ -10,11 +10,18 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 ## CBOM Workbench rules
 
-- The console is read-only and must use the same-origin `/api/*` proxy; do not
-  expose PostgreSQL or the internal FastAPI origin to the browser.
-- Preserve the four primary views: Overview, Inventory, Accountability, and
-  POA&M. Candidate findings and evidence requests must remain visually and
-  semantically distinct.
+- Catalog and assessment evidence remains read-only. All browser API requests,
+  including authorized Admin mutations, must use the same-origin `/api/*`
+  proxy; do not expose PostgreSQL, the internal FastAPI origin, AWS credentials,
+  or application bearer tokens to the browser.
+- Preserve the four primary read views—Overview, Inventory, Accountability, and
+  POA&M—and the administrator-only Admin workspace. Candidate findings and
+  evidence requests must remain visually and semantically distinct.
+- Admin corpus ingestion must send only manifest/job-control requests through
+  the proxy. File bytes upload directly to checksum-bound presigned private-S3
+  URLs, and job status/logs/results are read through scoped API endpoints.
+- Keep cloud task launch disabled for local click-through identities that do
+  not map to a provisioned, auditable application user.
 - Do not add demo/sample fallbacks when the API is unavailable.
 - Keep desktop navigation fixed, mobile navigation reachable, tables horizontally
   scrollable, drawers keyboard operable, and light/dark tokens accessible.

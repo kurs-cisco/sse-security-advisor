@@ -1,8 +1,9 @@
 # Cloud authentication and AWS deployment assessment
 
-This document records the AWS assessment performed on 2026-09-18 and the staged
-ECS deployment performed on 2026-09-22. It intentionally contains no OIDC
-client secret, database password, bearer token, or source inventory payload.
+This document records the AWS assessment performed on 2026-09-18, the staged
+ECS deployment performed on 2026-09-22, and the latest application rollout on
+2026-09-24. It intentionally contains no OIDC client secret, database password,
+bearer token, or source inventory payload.
 
 ## Authentication modes
 
@@ -74,6 +75,9 @@ Route 53 cbom alias ----> HTTPS ALB + OIDC ----> Next.js :3000 --internal bearer
 Route 53 api.cbom alias -> HTTPS ALB + API token -> FastAPI :8000 <-------------+
                                                         |
                                                         +-> private PostgreSQL 16 RDS
+Admin browser -------- checksum-bound presigned PUT ---> private temporary S3
+FastAPI job control -----------------------------------> one-off ECS ingest task
+private temporary S3 ----------------------------------> one-off ECS ingest task
 ```
 
 The ALB reaches Next.js only on port 3000 and FastAPI only on port 8000. The
@@ -121,16 +125,33 @@ The full procedure is in [DATABASE_SNAPSHOTS.md](DATABASE_SNAPSHOTS.md).
 The `cbom-workbench-dev` CloudFormation stack is deployed in account
 `135124134289`, region `us-gov-east-1`, with termination protection enabled.
 The ECS service is active at desired/running count 1 on an immutable
-`deploy-20260922-8` image tag. Both targets are healthy, `/healthz` returns 200,
+`deploy-20260924-1` image tag. Both targets are healthy, `/healthz` returns 200,
 and unauthenticated application requests redirect to the configured OIDC
 provider.
 
+Migrations through 015 are applied. The Admin workspace and scoped API can create
+checksum-manifested batches, upload directly to the private temporary S3 prefix,
+launch the one-off ECS task asynchronously, and inspect job status, bounded
+CloudWatch logs, and results. The deployed S3 CORS policy allows only the
+application origin and required `PUT` checksum/content-type headers. The
+post-deployment reconciliation imported the authoritative PR #1 target payload
+and its refreshed 76-row correlation set; the public evidence and service-impact
+checksums remained unchanged.
+
 The encrypted snapshot was restored after SHA-256 verification. The canonical
-manifest/API metrics are 39 service groups, 534 present source files, 533
+manifest/API metrics are 40 service groups, 534 present source files, 533
 unique present documents, 341 artifacts, 59,263 unique components, 282,688
 component occurrences, and 609 fingerprint records. Raw `COPY` counts printed
 by `pg_restore` are table-row counts and must not be compared directly with
 these deduplicated API metrics.
+
+The 2026-09-24 cloud reconciliation found zero group-set or document-count
+mismatches across Overview, Inventory/Accountability, POA&M, and milestone
+profiles. It reports 195 deduplicated asset candidates, 218 candidate findings,
+376 review-only findings, 13 proposed workstreams, and 11 coverage requests.
+The fifth empty category is the intentionally retained `on-prem-clients`
+planning group; absence of catalog evidence is shown as not assessable, never as
+proof of a FIPS failure or favorable posture.
 
 The September 22 service-impact planning import is checksum-gated at
 `5c481b5941d081b537c8f88805b78820fddfbe8d42af6bc9138d2dedce055ecc`.

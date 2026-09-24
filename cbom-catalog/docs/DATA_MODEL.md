@@ -21,6 +21,10 @@ erDiagram
     DOCUMENT ||--o{ EXTERNAL_RECORD : enriches
     ARTIFACT ||--o{ EXTERNAL_RECORD : assessed_by
     EXTERNAL_RECORD ||--o{ EXTERNAL_RECORD : parent_of
+    APP_USER |o--o{ INGESTION_BATCH : creates
+    API_CREDENTIAL |o--o{ INGESTION_BATCH : creates
+    INGESTION_BATCH ||--|{ INGESTION_OBJECT : declares
+    INGEST_RUN |o--o{ INGESTION_BATCH : records
 ```
 
 ## Three identity levels
@@ -54,6 +58,29 @@ recorded as an issue and reprocessed instead of being silently skipped.
 named `CNHE` in two source collections creates two scoped groups; APIs can filter
 by both values, while exact documents and canonical components may still dedupe
 across those collections.
+
+Migration 015 idempotently retains the approved empty SSE planning categories,
+including `on-prem-clients`, in existing databases. The ingester enforces the
+same collection-scoped list on every complete or incremental SSE refresh. These
+zero-document rows are coverage requests, not synthetic evidence records.
+
+## Operational ingestion control plane
+
+Migration 014 adds job metadata under the private `app_auth` schema without
+turning uploaded source bytes into database records:
+
+- `app_auth.ingestion_batch` stores the source collection, canonical manifest
+  SHA-256, dry-run/authoritative flags, expected and verified counts, temporary
+  S3 prefix/expiry, state/timestamps, ECS task ARN, optional `ingest_run` link,
+  bounded result/error data, and exactly one creating user or API credential.
+- `app_auth.ingestion_object` stores each normalized relative path, private S3
+  object key, expected SHA-256/size/content type, optional source modification
+  time, and verification timestamp.
+
+The object rows are a checksum manifest, not a raw-corpus archive. Job workers
+download to ephemeral storage and revalidate bytes before parsing. Shared
+catalog snapshots exclude all of `app_auth`, so identities, credentials,
+overlays, audit events, and ingestion-job metadata remain environment-local.
 
 ## Canonical component identity
 

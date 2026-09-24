@@ -3,8 +3,9 @@
 - [FIRST_RUN.md](FIRST_RUN.md) is the new-operator path for starting from source
   files or a database snapshot.
 - [INGESTION_AND_ASSESSMENT.md](INGESTION_AND_ASSESSMENT.md) is the durable
-  contract for checksum refreshes, approved service-group aliases, evidence
-  classification, Team Tracker enrichment, and candidate POA&M creation.
+  contract for local checksum refreshes, asynchronous Admin/S3/ECS ingestion,
+  approved service-group aliases, evidence classification, Team Tracker
+  enrichment, and candidate POA&M creation.
 - [DATABASE_SNAPSHOTS.md](DATABASE_SNAPSHOTS.md) covers secure export, manifest,
   distribution, restore, and acceptance.
 - [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) is the automated and browser
@@ -18,7 +19,7 @@
 - [QUERY_COOKBOOK.md](QUERY_COOKBOOK.md) contains common security, ownership,
   crypto, dependency, and quality queries.
 - [OPERATIONS.md](OPERATIONS.md) covers local use, containers, cloud deployment,
-  security, backups, and lifecycle concerns.
+  administrator ingestion jobs, security, backups, and lifecycle concerns.
 - [CLOUD_AUTH_AND_DEPLOYMENT.md](CLOUD_AUTH_AND_DEPLOYMENT.md) records the live
   AWS reuse assessment, OIDC trust boundary, and checksummed database
   snapshot/restore workflow.

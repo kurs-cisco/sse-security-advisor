@@ -378,6 +378,7 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(row["poam_impact"], "Blocker: No Data Available")
         self.assertEqual(row["risk_category"], "Critical")
         self.assertEqual(row["comments"], "Customer-facing service")
+        self.assertEqual(row["coverage_gap_count"], 0)
         self.assertEqual(row["service_impact_evidence_grade"], "user_asserted")
         self.assertTrue(row["service_impact_review_required"])
 
@@ -393,6 +394,26 @@ class ApiQueryTests(unittest.TestCase):
         )
 
         self.assertEqual([row["service_key"] for row in filtered], ["a/one"])
+
+    def test_planning_summary_exposes_done_and_vendor_dependency_states(self) -> None:
+        profile = {
+            "tracker_rows": [
+                {
+                    "team": "One",
+                    "il2": {"raw_value": "Done", "status": "done", "date": None},
+                    "il5": {
+                        "raw_value": "Vendor Dependency",
+                        "status": "vendor_dependency",
+                        "date": None,
+                    },
+                }
+            ]
+        }
+
+        self.assertEqual(api._planning_summary(profile, "il2")["state"], "done")
+        self.assertEqual(
+            api._planning_summary(profile, "il5")["state"], "vendor_dependency"
+        )
 
     def test_document_path_and_collection_use_the_same_provenance_row(self) -> None:
         with patch.object(api, "_fetch_all", return_value=[]) as fetch:

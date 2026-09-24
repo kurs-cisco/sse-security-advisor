@@ -81,6 +81,38 @@ If normalization logic changes materially, use a new database/volume for the
 rebuild until migration behavior is defined. The parser version on every document
 makes mixed versions detectable.
 
+## Asynchronous cloud ingestion
+
+Cloud corpus additions use the Admin workspace or the supplied
+`scripts/submit_ingestion_batch.py` client. The control plane accepts only a
+canonical manifest and job-control requests; browser/client bytes go directly
+to checksum-bound presigned `PUT` URLs below private
+`transfer/ingestion/<batch-id>/` objects. After every expected object exists, a
+submit request launches the pinned one-off ECS job task.
+
+Use `dry_run=true` first. The worker downloads to ephemeral storage, verifies
+size and SHA-256 for every object, parses an inventory, and compares collection,
+path, and checksum with current `source_file` rows without calling
+`ingest_root`. A committed job invokes the normal checksum-gated ingester only
+after the same validation. Never set `authoritative_snapshot=true` for a partial
+collection.
+
+Operational checks:
+
+- confirm the batch reaches `succeeded` and its verified count equals its
+  expected count;
+- inspect bounded logs/results through the Admin/API status routes rather than
+  giving browsers AWS credentials;
+- investigate a task that remains `queued`, `validating`, or `running` through
+  ECS service/task events and `/cbom-workbench/dev/jobs` CloudWatch logs;
+- retain audit/job rows in the environment-local `app_auth` schema, while the
+  temporary S3 lifecycle expires uploaded objects; and
+- revoke short-lived automation credentials after verification.
+
+See [INGESTION_AND_ASSESSMENT.md](INGESTION_AND_ASSESSMENT.md) for endpoint and
+manifest details and [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for the API
+and browser dry-run acceptance flow.
+
 ## Raw data policy
 
 For the current ~305 MiB corpus, storing raw JSONB is convenient. At larger scale:
@@ -146,6 +178,8 @@ sidecar, and JSON manifest. Restore only into an empty database with
 
 ## Monitoring
 
-Monitor failed ingest runs, `ingest_issue` error counts, database/storage growth,
-API latency, long recursive queries, and autovacuum health. The `/healthz` endpoint
-checks database connectivity; `/api/v1/stats` provides catalog-level counts.
+Monitor failed ingest runs, asynchronous batches that fail or stop progressing,
+checksum-verification errors, `ingest_issue` counts, temporary-object growth,
+API latency, long recursive queries, and autovacuum health. The `/healthz`
+endpoint checks database connectivity; `/api/v1/stats` provides catalog-level
+counts.

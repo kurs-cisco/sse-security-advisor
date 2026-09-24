@@ -344,6 +344,41 @@ class FipsAssessmentTests(unittest.TestCase):
 
         self.assertEqual(first["findings"][0]["finding_id"], second["findings"][0]["finding_id"])
 
+    def test_equivalent_occurrence_findings_are_counted_once(self) -> None:
+        shared_sha = "b" * 64
+        observations = [
+            observation(
+                1,
+                "fedramp:meets-fips-140-3",
+                "true",
+                evidence_id=index,
+                occurrence_id=index,
+                kind="component_property",
+                component_identity="pkg:generic/shared@1",
+                component_name="shared",
+                evidence_sha256=shared_sha,
+            )
+            for index in (100, 101)
+        ]
+
+        result = build_assessment(
+            [document(1, "DLP")],
+            observations,
+            as_of=date(2026, 9, 18),
+            service_group_inventory=[{
+                "source_collection": "sse-cboms",
+                "service_group": "DLP",
+                "source_files": 1,
+                "ingest_issues": 0,
+            }],
+        )
+
+        self.assertEqual(len(result["findings"]), 1)
+        self.assertEqual(result["findings"][0]["duplicate_occurrence_count"], 2)
+        self.assertEqual(result["summary"]["needs_review_findings"], 1)
+        self.assertEqual(result["service_groups"][0]["finding_count"], 1)
+        self.assertEqual(result["service_groups"][0]["needs_review_findings"], 1)
+
     def test_zero_document_service_groups_remain_visible_as_coverage_gaps(self) -> None:
         result = build_assessment(
             [document(1, "team")],
@@ -477,7 +512,9 @@ class FipsAssessmentTests(unittest.TestCase):
         self.assertEqual(groups["apix-no-cbom"]["tracker_rows"][0]["il5"]["date"], "2026-11-20")
         self.assertEqual(groups["sfcn-ravpn"]["tracker_rows"][0]["il2"]["date"], "2026-11-18")
         self.assertEqual(groups["brain"]["tracker_rows"][0]["il2"]["date"], "2026-11-06")
-        self.assertEqual(groups["adc"]["tracker_rows"][0]["il2"]["date"], "2027-01-15")
+        self.assertEqual(groups["adc"]["tracker_rows"][0]["il2"]["status"], "done")
+        self.assertIsNone(groups["adc"]["tracker_rows"][0]["il2"]["date"])
+        self.assertEqual(groups["opc"]["tracker_rows"][0]["il2"]["status"], "done")
         self.assertEqual(
             groups["opc"]["tracker_rows"][0]["cmvp_disposition"]["status"],
             "active_certificate",
@@ -495,8 +532,11 @@ class FipsAssessmentTests(unittest.TestCase):
 
         self.assertEqual(october["discovery"]["farthest_explicit_il2_date"], "2026-10-11")
         self.assertEqual(december["sfcn-firewall"]["farthest_explicit_il2_date"], "2026-12-04")
-        self.assertIn("va", march)
-        self.assertEqual(march["va"]["raw_il2_values"], ["March 2027"])
+        self.assertIn("va", december)
+        self.assertEqual(december["va"]["raw_il2_values"], ["15-Dec-2026"])
+        self.assertIn("rsm-secure-client-no-cbom", march)
+        self.assertIn("ios-no-cbom", march)
+        self.assertNotIn("adc", march)
 
     def test_two_portfolio_poams_keep_service_library_and_eta_links(self) -> None:
         items = [

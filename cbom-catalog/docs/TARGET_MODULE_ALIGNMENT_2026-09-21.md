@@ -1,4 +1,4 @@
-# Target-module alignment — 2026-09-21
+# Target-module alignment — updated 2026-09-24
 
 ## Result
 
@@ -17,8 +17,11 @@ evidence is called out rather than omitted. The obsolete `apix` planning alias
 is collapsed into canonical `apix-no-cbom` and does not create a duplicate row.
 
 Source fingerprint:
-`a4da7a0959c052932c8f282476a10eab26aa68e45cbcd4b841ba7b68c2d72004`.
-The source declares retrieval date `2026-09-21`, 39 teams, and 76 module rows.
+`158c2d2c82ff1b1e3a7e57bb1e95edad16f1c670e4f9223c4ccffaf847c6d45c`.
+The source declares retrieval date `2026-09-24`, 39 teams, and 76 module rows.
+Planning values are authoritative from GitHub PR #1 at commit
+`a57eaba9`; the superseded engineering milestone tracker document is not used
+as planning authority.
 
 ## Status reconciliation
 

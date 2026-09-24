@@ -1,14 +1,14 @@
 import type { LibraryInventory, ServiceGroupInventory, ServiceInventory } from "@/components/inventory/types";
 
 export const fallbackGroups: ServiceGroupInventory[] = [
-  { group: "BRAIN", documents: 97, services: 97, cryptoComponents: 1867, uniqueLibraries: 24, evidenceGaps: 0, formats: ["CycloneDX 1.6"], status: "ready" },
-  { group: "SFCN-RAVPN", documents: 26, services: 24, cryptoComponents: 1058, uniqueLibraries: 69, evidenceGaps: 0, formats: ["CycloneDX 1.6"], status: "ready" },
-  { group: "SFCN-FIREWALL", documents: 60, services: 60, cryptoComponents: 816, uniqueLibraries: 119, evidenceGaps: 0, formats: ["CycloneDX 1.6"], status: "ready" },
-  { group: "DISCOVERY", documents: 8, services: 8, cryptoComponents: 507, uniqueLibraries: 104, evidenceGaps: 0, formats: ["CycloneDX 1.6"], status: "ready" },
-  { group: "SWG-PROXY", documents: 5, services: 5, cryptoComponents: 442, uniqueLibraries: 198, evidenceGaps: 0, formats: ["CycloneDX 1.6"], status: "ready" },
-  { group: "CONTRAAST", documents: 46, services: 37, cryptoComponents: 239, uniqueLibraries: 35, evidenceGaps: 0, formats: ["CycloneDX 1.6"], status: "ready" },
-  { group: "ZTA-CALP", documents: 54, services: 30, cryptoComponents: 51, uniqueLibraries: 16, evidenceGaps: 0, formats: ["CycloneDX 1.6"], status: "ready" },
-  { group: "FIS/SMA Threatgrid", documents: 11, services: 11, cryptoComponents: 43, uniqueLibraries: 18, evidenceGaps: 0, formats: ["CycloneDX 1.6"], status: "ready" },
+  { group: "BRAIN", documents: 97, sourceFiles: 97, cryptoComponents: 1867, uniqueLibraries: 24, evidenceGaps: 0, ingestIssues: 0, formats: ["CycloneDX 1.6"], status: "ready" },
+  { group: "SFCN-RAVPN", documents: 26, sourceFiles: 24, cryptoComponents: 1058, uniqueLibraries: 69, evidenceGaps: 0, ingestIssues: 0, formats: ["CycloneDX 1.6"], status: "ready" },
+  { group: "SFCN-FIREWALL", documents: 60, sourceFiles: 60, cryptoComponents: 816, uniqueLibraries: 119, evidenceGaps: 0, ingestIssues: 0, formats: ["CycloneDX 1.6"], status: "ready" },
+  { group: "DISCOVERY", documents: 8, sourceFiles: 8, cryptoComponents: 507, uniqueLibraries: 104, evidenceGaps: 0, ingestIssues: 0, formats: ["CycloneDX 1.6"], status: "ready" },
+  { group: "SWG-PROXY", documents: 5, sourceFiles: 5, cryptoComponents: 442, uniqueLibraries: 198, evidenceGaps: 0, ingestIssues: 0, formats: ["CycloneDX 1.6"], status: "ready" },
+  { group: "CONTRAAST", documents: 46, sourceFiles: 37, cryptoComponents: 239, uniqueLibraries: 35, evidenceGaps: 0, ingestIssues: 0, formats: ["CycloneDX 1.6"], status: "ready" },
+  { group: "ZTA-CALP", documents: 54, sourceFiles: 30, cryptoComponents: 51, uniqueLibraries: 16, evidenceGaps: 0, ingestIssues: 0, formats: ["CycloneDX 1.6"], status: "ready" },
+  { group: "FIS/SMA Threatgrid", documents: 11, sourceFiles: 11, cryptoComponents: 43, uniqueLibraries: 18, evidenceGaps: 0, ingestIssues: 0, formats: ["CycloneDX 1.6"], status: "ready" },
 ];
 
 export const fallbackServices: ServiceInventory[] = [

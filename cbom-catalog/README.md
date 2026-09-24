@@ -46,7 +46,13 @@ anomalies.
 
 ```mermaid
 flowchart LR
-    A[Read-only corpus mount] --> B[Classifier and parser]
+    A[Read-only local corpus mount] --> B[Classifier and parser]
+    H[Admin browser manifest] --> I[FastAPI job control]
+    I -->|presigned PUT URLs| H
+    H --> J[Temporary private S3]
+    I --> K[One-off ECS job]
+    J --> K
+    K --> B
     B --> C[(PostgreSQL relational core)]
     B --> D[Raw JSONB and evidence]
     C --> E[SQL views and recursive queries]
@@ -154,6 +160,15 @@ docker compose --profile tools run --rm ingest
 Its JSON result includes `files_unchanged`; those files were hashed and verified
 but never parsed again.
 
+Cloud additions use the asynchronous administrator ingestion API instead of a
+bind mount. The client submits a canonical checksum manifest, uploads bytes
+directly to temporary private S3 through checksum-bound presigned URLs, and
+submits a one-off ECS task. The task revalidates every SHA-256 before either a
+non-mutating comparison (`dry_run=true`) or the existing checksum-gated ingest.
+FastAPI never receives the raw corpus synchronously. See
+[Ingestion and assessment intelligence](docs/INGESTION_AND_ASSESSMENT.md) for
+the protocol and supplied client.
+
 ## Query surfaces
 
 The API supports:
@@ -170,6 +185,11 @@ The API supports:
   register and service drawer
 - `/api/v1/source-collections` and `/api/v1/service-groups`
 - `/api/v1/fingerprints` and `/api/v1/ingest-runs`
+- `/api/v1/admin/ingestion/batches` to list/create manifest-backed jobs and
+  `/api/v1/admin/ingestion/batches/{id}` for status/results
+- `/api/v1/admin/ingestion/batches/{id}/submit` to launch the asynchronous ECS
+  task and `/api/v1/admin/ingestion/batches/{id}/logs` for bounded task output;
+  these routes require active-admin `ingestion:read`/`ingestion:write` scopes
 - `/api/v1/components` and `/api/v1/components/{id}/usage`
 - `/api/v1/artifacts`
 - `/api/v1/dependency-documents` and
@@ -204,7 +224,8 @@ cbom-catalog/
 ├── db/                         Ordered PostgreSQL migrations and runner
 ├── docs/                        Corpus, mapping, model, query, and operations docs
 ├── examples/queries.sql         Ready-to-run investigation queries
-├── src/cbom_catalog/            Parser, inventory, ingestion, API, and static workbench
+├── scripts/                     Snapshot and admin-ingestion clients
+├── src/cbom_catalog/            Parser, inventory, ingestion/jobs, API, and legacy UI
 ├── tests/                       Synthetic and real-corpus parser tests
 ├── Dockerfile
 └── docker-compose.yml
@@ -235,7 +256,8 @@ After installing the project dependencies (`python -m pip install -e .`), run:
 PYTHONPATH=src python -m unittest discover -s tests -v
 ```
 
-The test suite includes checksum refresh behavior, scoped API query regressions,
+The test suite includes checksum refresh behavior, asynchronous manifest/job
+validation, scoped admin-ingestion authorization, API query regressions,
 synthetic CycloneDX 1.5 and SPDX 2.3 inputs, plus real samples from CNHE, LANDERS,
 FROUTER, ZTA-BAP, and ZTA-CALP.
 

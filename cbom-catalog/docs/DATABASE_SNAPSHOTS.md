@@ -24,9 +24,12 @@ The manifest explicitly says that exact raw source bytes are not included. Keep
 the immutable corpus/object-store versions independently.
 
 The `app_auth` schema is deliberately excluded. Shared bundles never contain
-user identities, API credential digests, administrator overlays, or access
-audit events. After restore, apply migrations and bootstrap administrators in
-the destination environment through its own identity provider.
+user identities, API credential digests, administrator overlays, access audit
+events, ingestion manifests/object keys, job state/results, or ECS task
+references. Raw temporary S3 objects are never part of the database archive.
+After restore, apply migrations and bootstrap administrators independently in
+the destination environment through its own identity provider; ingestion-job
+history starts empty and remains local to that environment's infrastructure.
 
 ## Publication gate
 

@@ -1425,6 +1425,10 @@ def _planning_summary(profile: dict[str, Any], key: str) -> dict[str, Any]:
         state = "dated"
     elif statuses == {"not_applicable"}:
         state = "not_applicable"
+    elif statuses == {"done"}:
+        state = "done"
+    elif statuses == {"vendor_dependency"}:
+        state = "vendor_dependency"
     elif statuses == {"not_supplied"}:
         state = "not_supplied"
     else:
@@ -1528,6 +1532,7 @@ def _service_group_register_rows(
                 "review_observations": int(rollup.get("needs_review_findings") or 0),
                 "finding_count": int(rollup.get("finding_count") or 0),
                 "coverage_gap_states": sorted(coverage_by_service.get(service_key, [])),
+                "coverage_gap_count": len(coverage_by_service.get(service_key, [])),
                 "poam_candidate_ids": sorted(poam_by_service.get(service_key, [])),
                 "poam_candidate_count": len(poam_by_service.get(service_key, [])),
                 "workstream_ids": sorted(workstreams_by_service.get(service_key, [])),

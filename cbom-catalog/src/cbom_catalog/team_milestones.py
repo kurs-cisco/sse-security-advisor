@@ -1,4 +1,4 @@
-"""Reviewed, immutable Team Tracker enrichment for FIPS candidate views.
+"""Reviewed, authoritative owner-supplied planning enrichment for FIPS views.
 
 This module deliberately keeps tracker commitments separate from assessment
 evidence.  A tracker row is planning metadata, never proof of CMVP validation
@@ -13,16 +13,19 @@ from datetime import datetime
 from typing import Any
 
 TRACKER_SOURCE = {
-    "source": "FIPS 140-3 Engineering Milestone Tracker attached Confluence export",
-    "url": "https://cisco-sbg.atlassian.net/wiki/spaces/PROD/pages/1492947409/FIPS+140-3+Engineering+Milestone+Tracker#Team-Tracker",
-    "page_id": "1492947409",
-    "source_file": "FIPS+140-3+Engineering+Milestone+Tracker.doc",
-    "source_file_sha256": "88079a7b6ea1659effe45637dce850e2e8eeba6a15df718c68c70ff3a439ed62",
+    "source": "GitHub PR #1 authoritative owner-supplied planning update",
+    "repository": "kurs-cisco/sse-security-advisor",
+    "pull_request": 1,
+    "source_commit": "a57eaba9a8fb2c9d91e5db374d7aea5d9566a745",
+    "source_file": None,
+    "source_file_sha256": None,
     "table_rows": 40,
     "table_columns": 16,
-    "observed_at": "2026-09-18T07:56:53Z",
-    "mapping_reviewed_at": "2026-09-18",
-    "mapping_status": "repopulated from user-supplied authoritative export",
+    "observed_at": "2026-09-24T12:59:51Z",
+    "mapping_reviewed_at": "2026-09-24",
+    "mapping_status": "authoritative owner-supplied planning update from PR #1",
+    "evidence_grade": "user_asserted",
+    "review_required": True,
 }
 
 
@@ -30,8 +33,8 @@ def _slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
 
 
-# Only fields required for portfolio routing are copied here. Raw milestone
-# cells preserve the attached export's date and qualifying text for auditability.
+# Only fields required for portfolio routing are copied here. Values preserve
+# the authoritative PR #1 planning update and remain user-asserted metadata.
 _TEAM_ROWS: dict[str, dict[str, Any]] = {
     "APIX": {"team": "APIX (Authsvc,APIGW)", "owner": "Prashanth", "lead": "Pankaja Dakhane", "il2": "13 Nov 2026 (KONG version upgrade drives this date, other tickets would come sooner.)", "il5": "20 Nov 2026 (KONG version upgrade drives this date, other tickets would come sooner.)"},
     "SFCN-RAVPN": {"team": "SFCN RAVPN", "owner": "Ashok", "lead": "RA-VPN - Anurag Shukla / ASA - Narendra Meka", "il2": "18 Nov 2026 (Deployment to be done based on the availability of SRE team.)", "il5": "18 Nov 2026"},
@@ -75,9 +78,8 @@ _TEAM_ROWS: dict[str, dict[str, Any]] = {
     "IOS": {"team": "iOS", "owner": "John", "lead": "Erik Peterson", "il2": "31 Mar 2027", "il5": ""},
 }
 
-# Exact CMVP-mapping cells (or, for OPC/SWG Proxy, the directly associated
-# tracker comment) retained from the attached 2026-09-18 export.  These are
-# provider-attributed planning assertions, not independent CMVP verification.
+# CMVP-mapping context remains provider-attributed planning assertion, not
+# independent CMVP verification or evidence of deployment applicability.
 _CMVP_MAPPING_BY_TEAM: dict[str, str] = {
     "SFCN-RAVPN": "OpenSSL: 3.1.2; Golang with native cryptography",
     "SWG-PROXY": "OpenSSL 3.5.x — tracker comment identifies CMVP In-Test",
@@ -194,6 +196,16 @@ def _milestone(raw: str, label: str) -> dict[str, Any]:
         return {"label": label, "raw_value": "", "status": "not_supplied", "date": None}
     if raw.casefold().startswith("na"):
         return {"label": label, "raw_value": raw, "status": "not_applicable", "date": None}
+    normalized = raw.casefold().replace("_", " ").strip()
+    if normalized == "done":
+        return {"label": label, "raw_value": raw, "status": "done", "date": None}
+    if normalized == "vendor dependency":
+        return {
+            "label": label,
+            "raw_value": raw,
+            "status": "vendor_dependency",
+            "date": None,
+        }
     # A tracker cell may contain a firm date plus explanatory or relative text.
     # Preserve the entire cell, but use only the explicit date for scheduling.
     numeric_date = re.search(r"\b(\d{1,2}/\d{1,2}/\d{4}|\d{4}-\d{2}-\d{2})\b", raw)
