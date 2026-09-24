@@ -32,7 +32,10 @@ function ownerGroupId(owner: string) {
 
 function PlanningCell({ plan, label }: { plan: PlanningSummary; label: string }) {
   const title = plan.entries.map((entry) => `${entry.team}: ${entry.raw_value || "Not supplied"}`).join("\n");
-  if (plan.state !== "dated") return <span title={title} className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs font-medium text-amber-700 dark:text-amber-300"><CircleAlert className="size-3.5" />{plan.state === "not_applicable" ? "N/A" : "Date missing"}</span>;
+  const isDone = plan.entries.some((entry) => entry.raw_value?.trim().toLowerCase() === "done");
+  if (isDone) return <Badge tone="success">DONE</Badge>;
+  if (plan.state === "not_applicable") return <Badge tone="neutral">NA</Badge>;
+  if (plan.state !== "dated") return <span title={title} className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs font-medium text-amber-700 dark:text-amber-300"><CircleAlert className="size-3.5" />Date missing</span>;
   return <div title={title}><span className="whitespace-nowrap font-mono text-xs text-foreground">{formatDate(plan.farthest_date)}</span>{plan.explicit_dates.length > 1 ? <span className="mt-1 block text-[11px] text-muted-foreground">{plan.explicit_dates.length} {label} dates · farthest shown</span> : null}</div>;
 }
 

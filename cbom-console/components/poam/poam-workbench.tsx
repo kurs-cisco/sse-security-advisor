@@ -24,8 +24,9 @@ type CoverageGapRow = {
 };
 
 function milestoneText(milestone: TrackerMilestone) {
+  if (milestone.raw_value?.trim().toLowerCase() === "done") return <Badge tone="success">DONE</Badge>;
+  if (milestone.status === "not_applicable") return <Badge tone="neutral">NA</Badge>;
   if (milestone.status === "not_supplied") return <span className="poam-missing">Not supplied</span>;
-  if (milestone.status === "not_applicable") return "Not applicable";
   if (milestone.status === "unparseable_or_relative") return <span className="poam-muted">Ignored — no explicit date</span>;
   return milestone.raw_value;
 }
