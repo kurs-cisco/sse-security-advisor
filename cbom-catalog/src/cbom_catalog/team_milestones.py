@@ -43,7 +43,7 @@ _TEAM_ROWS: dict[str, dict[str, Any]] = {
     "REPORTING": {"team": "Reporting", "owner": "Prashanth", "lead": "Ashutosh Saxena", "il2": "04 Dec 2026", "il5": ""},
     "UNIFIED-POLICY": {"team": "UP (Unified Policy)", "owner": "Prashanth", "lead": "Ashutosh Saxena", "il2": "06 Nov 2026", "il5": ""},
     "SWG-PROXY": {"team": "SWG Proxy", "owner": "Avnish", "lead": "Dinesh Upreti", "il2": "Next week Wave - CRs…", "il5": ""},
-    "OPC": {"team": "OPC", "owner": "Avnish", "lead": "Dinesh Upreti / Preet Kumar Sahu", "il2": "", "il5": ""},
+    "OPC": {"team": "OPC", "owner": "Avnish", "lead": "Dinesh Upreti / Preet Kumar Sahu", "il2": "Done", "il5": ""},
     "DNS-PLATFORM": {"team": "DNS (Resolver)", "owner": "Ashok", "lead": "Dipa Thakkar / Prashanth Suvarna", "il2": "26 Feb 2027", "il5": "26 Feb 2027"},
     "DISTHOST": {"team": "DistHost", "owner": "Avnish", "lead": "Georgekutty Jose", "il2": "30 Sep 2026 / Fedramp Cycle", "il5": "30 Sep 2026"},
     "DOWNLOAD-SERVICE": {"team": "Download Service", "owner": "Avnish", "lead": "Georgekutty Jose", "il2": "22 Sep 2026 / Fedramp Cycle", "il5": "22 Sep 2026"},
