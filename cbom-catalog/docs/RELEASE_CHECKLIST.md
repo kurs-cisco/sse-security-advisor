@@ -39,9 +39,15 @@ assessment paging, issues, and all three exports.
 - [ ] Inventory service, library, and heatmap views filter, sort, page, and open
       document/component drawers.
 - [ ] Accountability groups by executive owner; owner/lead/IL2/IL5 filters and
-      sorting work; POA&M impact, risk category, and comments render without
+      sorting work; POA&M impact, service-impact risk, and comments render without
       changing those planning values; the service drawer shows import
       provenance, evidence, libraries, findings, and POA&M mappings.
+- [ ] Accountability and POA&M show the same canonical candidate and workstream
+      IDs, owner, mitigation date, linked-finding count, and affected scope for
+      every service-group drawer.
+- [ ] Target-module planning assertions are visibly labeled as non-findings;
+      asserted active-certificate badges reflect verification conflicts instead
+      of implying validation.
 - [ ] POA&M workstream/candidate views, coverage gaps, filters, paging, drawers,
       and compliance ZIP/workstream CSV/asset CSV downloads work.
 - [ ] The invited administrator activates on first OIDC login; viewers do not
@@ -68,6 +74,8 @@ assessment paging, issues, and all three exports.
       decision based only on catalog evidence.
 - [ ] The active target-module import checksum matches the authoritative PR #1
       planning payload; `done` and `vendor_dependency` remain planning states.
+- [ ] Active public-authority and catalog-correlation evidence imports have
+      claim links to the active target-module import after every planning refresh.
 - [ ] IL2 mitigation dates use the farthest explicit IL2 date; IL5 stays context.
 - [ ] Asset-level candidate evidence remains available beneath workstreams.
 - [ ] Snapshot checksum and manifest are present and match the restored copy.

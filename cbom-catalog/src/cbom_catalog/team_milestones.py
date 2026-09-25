@@ -307,7 +307,20 @@ def _target_rows(group_data: dict[str, Any]) -> list[dict[str, Any]]:
         modules_by_team.setdefault(str(module.get("team_key") or ""), []).append(module)
     rows: list[dict[str, Any]] = []
     for team in group_data.get("teams", []):
-        modules = modules_by_team.get(str(team.get("team_key") or ""), [])
+        team_key = str(team.get("team_key") or "")
+        # PR #1 is authoritative for owner/lead/milestone planning.  The
+        # imported target-module inventory remains authoritative only for its
+        # module assertions.  This also prevents an older active database
+        # import from silently replacing a newer approved planning value.
+        if team_key in _MERGED_SOURCE_KEYS:
+            continue
+        source_keys = _MERGED_TEAM_KEYS.get(team_key, (team_key,))
+        modules = [
+            module
+            for source_key in source_keys
+            for module in modules_by_team.get(source_key, [])
+        ]
+        planning = _tracker_row(team_key) if team_key in _TEAM_ROWS else None
         summaries = []
         for module in modules:
             current = module.get("current_module") or "Module not supplied"
@@ -316,11 +329,17 @@ def _target_rows(group_data: dict[str, Any]) -> list[dict[str, Any]]:
             summaries.append(f"{current} -> {target} [{disposition}]")
         rows.append(
             {
-                "team": team.get("team"),
-                "owner": team.get("owner"),
-                "lead": team.get("lead"),
-                "il2": _milestone(str(team.get("il2_raw") or ""), "IL2"),
-                "il5": _milestone(str(team.get("il5_raw") or ""), "IL5"),
+                "team": planning["team"] if planning else team.get("team"),
+                "owner": planning["owner"] if planning else team.get("owner"),
+                "lead": planning["lead"] if planning else team.get("lead"),
+                "il2": _milestone(
+                    planning["il2"] if planning else str(team.get("il2_raw") or ""),
+                    "IL2",
+                ),
+                "il5": _milestone(
+                    planning["il5"] if planning else str(team.get("il5_raw") or ""),
+                    "IL5",
+                ),
                 "cmvp_mapping": "; ".join(summaries) or None,
                 "cmvp_disposition": {
                     "status": "mixed_target_module_inventory",
@@ -328,8 +347,8 @@ def _target_rows(group_data: dict[str, Any]) -> list[dict[str, Any]]:
                     "evidence_grade": "user_asserted",
                     "review_required": True,
                 },
-                "source_teams": [team.get("team")],
-                "source_rows": [],
+                "source_teams": planning["source_teams"] if planning else [team.get("team")],
+                "source_rows": planning["source_rows"] if planning else [],
                 "target_modules": modules,
             }
         )
@@ -348,10 +367,10 @@ def _profile(
         leads = list(dict.fromkeys(row["lead"] for row in rows if row.get("lead")))
         delivery_rows = [
             {
-                "il2": str(team.get("il2_raw") or ""),
-                "il5": str(team.get("il5_raw") or ""),
+                "il2": str(row["il2"].get("raw_value") or ""),
+                "il5": str(row["il5"].get("raw_value") or ""),
             }
-            for team in target_group.get("teams", [])
+            for row in rows
         ]
         return {
             "service_group": canonical_group,
@@ -362,7 +381,8 @@ def _profile(
             "delivery_wave": _delivery_wave(delivery_rows),
             "tracker_rows": rows,
             "target_modules": target_group.get("modules", []),
-            "planning_source": (target_module_contract or {}).get("source"),
+            "planning_source": TRACKER_SOURCE,
+            "target_module_source": (target_module_contract or {}).get("source"),
         }
     row_keys = GROUP_TEAM_KEYS.get(canonical_group, ())
     rows = [_tracker_row(key) for key in row_keys]
@@ -428,10 +448,9 @@ def team_milestones(
         material = repr((groups, all_tracker_rows)).encode("utf-8")
         return {
             "source": {
-                **target_module_contract["source"],
-                "source": "Imported team target-module inventory",
+                **TRACKER_SOURCE,
                 "payload_sha256": hashlib.sha256(material).hexdigest(),
-                "prior_tracker_source": TRACKER_SOURCE,
+                "target_module_source": target_module_contract["source"],
             },
             "disclaimer": (
                 "Imported team module/status data is user-asserted planning metadata; "

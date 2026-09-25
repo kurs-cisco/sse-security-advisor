@@ -58,6 +58,11 @@ candidate ownership and mitigation date, and reviewed annotations. They do not
 turn candidate findings into assessor conclusions, prove CMVP validation, or
 authorize POA&M closure.
 
+Active POA&M candidate overlays are applied consistently to API responses, the
+candidate CSV export, and the candidate member of the compliance ZIP. The
+underlying assessment evidence, workstream grouping, and source hashes remain
+unchanged.
+
 The administrator page does not expose a standalone overlay editor. Overlay
 editing can be added later as contextual inline actions on the relevant tables
 and entity detail views; until then, the authenticated API remains the only

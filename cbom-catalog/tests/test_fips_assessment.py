@@ -13,6 +13,7 @@ from cbom_catalog.fips_assessment import (
     render_workstream_csv,
 )
 from cbom_catalog.team_milestones import (
+    TRACKER_SOURCE,
     build_portfolio_poam_items,
     enrich_poam_items,
     portfolio_delivery_waves,
@@ -537,6 +538,52 @@ class FipsAssessmentTests(unittest.TestCase):
         self.assertIn("rsm-secure-client-no-cbom", march)
         self.assertIn("ios-no-cbom", march)
         self.assertNotIn("adc", march)
+
+    def test_imported_module_contract_cannot_override_pr1_planning(self) -> None:
+        stale_contract = {
+            "source": {"source_file": "stale-target-modules.json"},
+            "groups": {
+                "scc-backend": {
+                    "teams": [
+                        {"team_key": "SCC", "team": "SCC", "owner": None, "lead": "Naveen Benagi", "il2_raw": "", "il5_raw": ""},
+                        {"team_key": "SCC-BACKEND", "team": "SCC Backend", "owner": "Mohammad Islam", "lead": "Amar Lal Dhakad", "il2_raw": "", "il5_raw": ""},
+                    ],
+                    "modules": [],
+                },
+                "discovery": {
+                    "teams": [
+                        {"team_key": "DISCOVERY", "team": "Discovery", "owner": None, "lead": "Satyasanjibani Routray", "il2_raw": "11-Oct-2026", "il5_raw": ""},
+                    ],
+                    "modules": [],
+                },
+                "android-no-cbom": {
+                    "teams": [
+                        {"team_key": "ANDROID", "team": "Android", "owner": "Avnish", "lead": "Dinesh Upreti", "il2_raw": "31-Oct-2026", "il5_raw": "31-Oct-2026"},
+                    ],
+                    "modules": [],
+                },
+            },
+        }
+
+        result = team_milestones(stale_contract)
+        groups = {
+            row["service_group"]: row
+            for row in result["groups"]
+        }
+
+        self.assertEqual(len(groups["scc-backend"]["tracker_rows"]), 1)
+        self.assertEqual(groups["scc-backend"]["tracker_rows"][0]["il2"]["date"], "2026-10-31")
+        self.assertEqual(groups["discovery"]["owners"], ["Ashok"])
+        self.assertEqual(
+            groups["discovery"]["tracker_rows"][0]["source_teams"],
+            ["Discovery", "Resource Discovery"],
+        )
+        self.assertEqual(groups["android-no-cbom"]["tracker_rows"][0]["il2"]["status"], "not_applicable")
+        self.assertEqual(result["source"]["source_commit"], TRACKER_SOURCE["source_commit"])
+        self.assertEqual(
+            result["source"]["target_module_source"]["source_file"],
+            "stale-target-modules.json",
+        )
 
     def test_two_portfolio_poams_keep_service_library_and_eta_links(self) -> None:
         items = [

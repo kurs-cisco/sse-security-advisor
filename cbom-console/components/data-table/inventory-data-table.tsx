@@ -23,6 +23,7 @@ type InventoryDataTableProps<TData> = {
   emptyMessage?: string;
   errorMessage?: string;
   loading?: boolean;
+  tableLabel?: string;
   remote?: {
     total: number;
     query: string;
@@ -43,6 +44,7 @@ export function InventoryDataTable<TData>({
   emptyMessage = "No inventory records match the current filters.",
   errorMessage,
   loading = false,
+  tableLabel = "Inventory records",
   remote,
 }: InventoryDataTableProps<TData>) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
@@ -83,7 +85,7 @@ export function InventoryDataTable<TData>({
   const searchValue = remote?.query ?? ((table.getColumn(filterColumn ?? "")?.getFilterValue() as string) ?? "");
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-border/70 bg-card shadow-sm">
+    <div className="overflow-hidden rounded-2xl border border-border/70 bg-card shadow-sm" aria-busy={loading}>
       <div className="flex flex-col gap-3 border-b border-border/70 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
         <label className="relative block max-w-sm flex-1">
           <span className="sr-only">{searchPlaceholder.replace(/…$/, "")}</span>
@@ -97,24 +99,25 @@ export function InventoryDataTable<TData>({
         </label>
         <span className="font-mono text-xs text-muted-foreground">{total.toLocaleString()} records</span>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[840px] text-left text-sm">
+      {errorMessage && visibleRows.length ? <p role="alert" className="border-b border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">{errorMessage}</p> : null}
+      <div className="inventory-table-scroll overflow-x-auto" tabIndex={0} aria-label={`${tableLabel}. Scroll horizontally to view additional columns.`}>
+        <table className="w-full min-w-[640px] text-left text-sm">
+          <caption className="sr-only">{tableLabel}</caption>
           <thead className="bg-muted text-xs uppercase tracking-[0.12em] text-muted-foreground">
             {table.getHeaderGroups().map((headerGroup) => (
               <tr key={headerGroup.id}>
                 {headerGroup.headers.map((header) => (
                   <th key={header.id} className="sticky top-0 z-10 h-11 bg-muted px-4 font-medium" aria-sort={header.column.getIsSorted() === "asc" ? "ascending" : header.column.getIsSorted() === "desc" ? "descending" : undefined}>
-                    {header.isPlaceholder ? null : (
+                    {header.isPlaceholder ? null : header.column.getCanSort() ? (
                       <button
                         type="button"
-                        className="inline-flex items-center gap-1 transition hover:text-foreground disabled:cursor-default"
-                        disabled={!header.column.getCanSort()}
+                        className="inline-flex items-center gap-1 transition hover:text-foreground"
                         onClick={header.column.getToggleSortingHandler()}
                       >
                         {flexRender(header.column.columnDef.header, header.getContext())}
-                        {header.column.getCanSort() ? <ChevronsUpDown className="size-3.5 opacity-55" /> : null}
+                        <ChevronsUpDown className="size-3.5 opacity-55" />
                       </button>
-                    )}
+                    ) : <span>{flexRender(header.column.columnDef.header, header.getContext())}</span>}
                   </th>
                 ))}
               </tr>
@@ -135,7 +138,7 @@ export function InventoryDataTable<TData>({
       </div>
       <div className="flex flex-col gap-3 border-t border-border/70 px-4 py-3 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2">Rows <select aria-label="Rows per page" className="rounded-md border border-border bg-background px-2 py-1 text-foreground" value={effectivePagination.pageSize} onChange={(e) => table.setPageSize(Number(e.target.value))}>{[8, 16, 32].map((size) => <option key={size}>{size}</option>)}</select></div>
-        <div className="flex items-center gap-2"><span>{visibleRows.length ? `${effectivePagination.pageIndex * effectivePagination.pageSize + 1}–${Math.min(effectivePagination.pageIndex * effectivePagination.pageSize + visibleRows.length, total)} of ${total}` : "0 records"}</span><button aria-label="Previous page" className="rounded-md border border-border p-1 disabled:opacity-40" onClick={() => table.previousPage()} disabled={loading || !table.getCanPreviousPage()}><ChevronLeft className="size-4" /></button><button aria-label="Next page" className="rounded-md border border-border p-1 disabled:opacity-40" onClick={() => table.nextPage()} disabled={loading || !table.getCanNextPage()}><ChevronRight className="size-4" /></button></div>
+        <div className="flex items-center gap-2"><span aria-live="polite">{loading && visibleRows.length ? "Updating · " : ""}{visibleRows.length ? `${effectivePagination.pageIndex * effectivePagination.pageSize + 1}–${Math.min(effectivePagination.pageIndex * effectivePagination.pageSize + visibleRows.length, total)} of ${total}` : "0 records"}</span><button aria-label="Previous page" className="rounded-md border border-border p-1 disabled:opacity-40" onClick={() => table.previousPage()} disabled={loading || !table.getCanPreviousPage()}><ChevronLeft className="size-4" /></button><button aria-label="Next page" className="rounded-md border border-border p-1 disabled:opacity-40" onClick={() => table.nextPage()} disabled={loading || !table.getCanNextPage()}><ChevronRight className="size-4" /></button></div>
       </div>
     </div>
   );

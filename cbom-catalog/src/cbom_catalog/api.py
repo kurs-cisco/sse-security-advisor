@@ -351,6 +351,23 @@ def _active_overlay_map(resource_type: str) -> dict[str, dict[str, Any]]:
     return {str(row["resource_key"]): row for row in rows}
 
 
+def _apply_candidate_overlays(
+    items: list[dict[str, Any]],
+    overlays: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Apply review metadata to response copies without mutating cached evidence."""
+    overlays = overlays or {}
+    result = []
+    for source in items:
+        item = dict(source)
+        overlay = overlays.get(str(item.get("poam_candidate_id") or ""))
+        if overlay:
+            item.update(overlay.get("payload") or {})
+            item["admin_overlay"] = overlay
+        result.append(item)
+    return result
+
+
 def _cached_catalog_value(
     namespace: str,
     parts: tuple[Any, ...],
@@ -1425,10 +1442,10 @@ def _planning_summary(profile: dict[str, Any], key: str) -> dict[str, Any]:
         state = "dated"
     elif statuses == {"not_applicable"}:
         state = "not_applicable"
-    elif statuses == {"done"}:
-        state = "done"
-    elif statuses == {"vendor_dependency"}:
+    elif "vendor_dependency" in statuses:
         state = "vendor_dependency"
+    elif "done" in statuses:
+        state = "done"
     elif statuses == {"not_supplied"}:
         state = "not_supplied"
     else:
@@ -1439,6 +1456,46 @@ def _planning_summary(profile: dict[str, Any], key: str) -> dict[str, Any]:
         "explicit_dates": dates,
         "entries": entries,
     }
+
+
+def _apply_service_group_overlays(
+    rows: list[dict[str, Any]],
+    overlays: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Apply active planning overlays consistently to register and detail views."""
+    overlays = overlays or {}
+    for row in rows:
+        overlay = overlays.get(str(row.get("service_key"))) or overlays.get(
+            str(row.get("service_key") or "").rsplit("/", 1)[-1]
+        )
+        if not overlay:
+            continue
+        patch = overlay.get("payload") or {}
+        if "effective_owners" in patch:
+            row["effective_owners"] = list(patch["effective_owners"] or [])
+            row["owner_state"] = (
+                "multiple" if len(row["effective_owners"]) > 1
+                else "supplied" if row["effective_owners"]
+                else "not_supplied"
+            )
+        if "leads" in patch:
+            row["leads"] = list(patch["leads"] or [])
+            row["lead_state"] = (
+                "multiple" if len(row["leads"]) > 1
+                else "supplied" if row["leads"]
+                else "not_supplied"
+            )
+        for milestone_key in ("il2", "il5"):
+            date_value = patch.get(f"{milestone_key}_date")
+            if date_value:
+                row[milestone_key] = {
+                    **row[milestone_key],
+                    "state": "dated",
+                    "farthest_date": date_value,
+                    "admin_override": True,
+                }
+        row["admin_overlay"] = overlay
+    return rows
 
 
 def _service_group_register_rows(
@@ -1495,6 +1552,18 @@ def _service_group_register_rows(
         service_impact = (service_impacts or {}).get(service_key, {})
         owners = list(profile.get("owners") or [])
         leads = list(profile.get("leads") or [])
+        target_modules = list(profile.get("target_modules") or [])
+        asserted_not_compliant = [
+            module
+            for module in target_modules
+            if module.get("normalized_status") == "asserted_not_compliant"
+        ]
+        verification_conflicts = [
+            module
+            for module in target_modules
+            if ((module.get("verification") or {}).get("overall") or {}).get("state")
+            in {"contradicted", "conflicting_evidence"}
+        ]
         rows.append(
             {
                 "service_key": service_key,
@@ -1515,6 +1584,7 @@ def _service_group_register_rows(
                 "service_impact_evidence_grade": service_impact.get("evidence_grade"),
                 "service_impact_review_required": service_impact.get("review_required", False),
                 "service_impact_source": service_impact.get("source"),
+                "risk_authority": service_impact.get("risk_authority"),
                 "source_files": int(rollup.get("source_files") or inventory.get("source_files") or 0),
                 "documents": int(rollup.get("documents") or inventory.get("unique_documents") or 0),
                 "documents_with_fips_evidence": int(rollup.get("documents_with_fips_evidence") or 0),
@@ -1531,6 +1601,9 @@ def _service_group_register_rows(
                 "candidate_findings": int(rollup.get("poam_candidate_findings") or 0),
                 "review_observations": int(rollup.get("needs_review_findings") or 0),
                 "finding_count": int(rollup.get("finding_count") or 0),
+                "target_module_review_count": len(target_modules),
+                "target_module_asserted_not_compliant_count": len(asserted_not_compliant),
+                "target_module_verification_conflict_count": len(verification_conflicts),
                 "coverage_gap_states": sorted(coverage_by_service.get(service_key, [])),
                 "coverage_gap_count": len(coverage_by_service.get(service_key, [])),
                 "poam_candidate_ids": sorted(poam_by_service.get(service_key, [])),
@@ -1623,28 +1696,7 @@ def service_group_register(
         team_milestones(_active_target_module_contract()),
         _active_service_impact_map(),
     )
-    group_overlays = _active_overlay_map("service_group")
-    for row in all_rows:
-        overlay = group_overlays.get(str(row.get("service_key"))) or group_overlays.get(
-            str(row.get("service_key") or "").rsplit("/", 1)[-1]
-        )
-        if not overlay:
-            continue
-        patch = overlay.get("payload") or {}
-        if "effective_owners" in patch:
-            row["effective_owners"] = list(patch["effective_owners"] or [])
-        if "leads" in patch:
-            row["leads"] = list(patch["leads"] or [])
-        for milestone_key in ("il2", "il5"):
-            date_value = patch.get(f"{milestone_key}_date")
-            if date_value:
-                row[milestone_key] = {
-                    **row[milestone_key],
-                    "state": "dated",
-                    "farthest_date": date_value,
-                    "admin_override": True,
-                }
-        row["admin_overlay"] = overlay
+    _apply_service_group_overlays(all_rows, _active_overlay_map("service_group"))
     rows = _filter_service_group_register(
         all_rows, query=query, owner=owner, lead=lead,
         il2_state=il2_state, il5_state=il5_state, action=action,
@@ -2010,9 +2062,10 @@ def document_components(
     document_id: int,
     query: str | None = None,
     crypto_only: bool = False,
+    include_total: bool = False,
     limit: int = Query(100, ge=1),
     offset: int = Query(0, ge=0),
-) -> list[dict[str, Any]]:
+) -> list[dict[str, Any]] | dict[str, Any]:
     if not _fetch_one("SELECT id FROM document WHERE id = %s", (document_id,)):
         raise HTTPException(status_code=404, detail="Document not found")
     clauses = ["dc.document_id = %s"]
@@ -2039,8 +2092,9 @@ def document_components(
     """
     if crypto_only:
         clauses.append(crypto_predicate)
-    params.extend((min(limit, _max_page_size()), offset))
-    return _fetch_all(
+    page_size = min(limit, _max_page_size())
+    params.extend((page_size, offset))
+    rows = _fetch_all(
         f"""
         SELECT dc.id AS occurrence_id, c.id AS component_id, c.component_type,
                c.namespace, c.name, c.version, c.canonical_purl, c.cpe,
@@ -2054,6 +2108,22 @@ def document_components(
         """,
         tuple(params),
     )
+    # Preserve the established list response unless a consumer explicitly asks
+    # for pagination metadata.  Detail dialogs need a total so that a full
+    # page does not incorrectly imply that another page exists.
+    if not include_total:
+        return rows
+    count_params = params[:-2]
+    count_row = _fetch_one(
+        f"""
+        SELECT count(*) AS total
+        FROM document_component dc
+        JOIN component c ON c.id = dc.component_id
+        WHERE {' AND '.join(clauses)}
+        """,
+        tuple(count_params),
+    )
+    return {"items": rows, "total": int((count_row or {}).get("total") or 0), "limit": page_size, "offset": offset}
 
 
 @app.get("/api/v1/components", tags=["components"])
@@ -2243,20 +2313,27 @@ def service_group_register_detail(
     library_offset: int = Query(0, ge=0),
 ) -> dict[str, Any]:
     """Evidence and candidate-action detail for one provenance-scoped group."""
-    assessment, _, _ = _cached_fips_assessment(source_collection, service_group)
-    overview, _, _ = _cached_catalog_value(
+    scoped_assessment, _, _ = _cached_fips_assessment(source_collection, service_group)
+    canonical_assessment, _, _ = _cached_fips_assessment(None, None)
+    canonical_overview, _, _ = _cached_catalog_value(
         "dashboard-overview",
-        (source_collection, service_group),
-        lambda: _build_dashboard_overview(source_collection, service_group),
+        (None, None),
+        lambda: _build_dashboard_overview(None, None),
     )
     milestone_contract = team_milestones(_active_target_module_contract())
     register_rows = _service_group_register_rows(
-        assessment,
-        overview,
+        canonical_assessment,
+        canonical_overview,
         milestone_contract,
         _active_service_impact_map(),
     )
-    if not register_rows:
+    _apply_service_group_overlays(register_rows, _active_overlay_map("service_group"))
+    service_key = f"{source_collection}/{service_group}"
+    register_row = next(
+        (row for row in register_rows if row.get("service_key") == service_key),
+        None,
+    )
+    if register_row is None:
         raise HTTPException(status_code=404, detail="Service group not found")
     profile = next(
         (
@@ -2296,18 +2373,36 @@ def service_group_register_detail(
         direction="desc",
         include_total=True,
     )
+    canonical_poam_items = _apply_candidate_overlays(
+        [
+            item
+            for item in canonical_assessment.get("poam_items", [])
+            if service_key in item.get("affected_services", [])
+        ],
+        _active_overlay_map("poam_candidate"),
+    )
+    canonical_workstreams = [
+        dict(item)
+        for item in canonical_assessment.get("poam_workstreams", [])
+        if service_key in item.get("affected_services", [])
+    ]
+    canonical_portfolio_items = [
+        dict(item)
+        for item in canonical_assessment.get("portfolio_poam_items", [])
+        if service_key in item.get("affected_service_groups", [])
+    ]
     poam_by_finding: dict[str, list[str]] = defaultdict(list)
-    for item in assessment.get("poam_items", []):
+    for item in canonical_poam_items:
         for finding_id in item.get("linked_finding_ids", []):
             candidate_id = item.get("poam_candidate_id")
             if candidate_id:
                 poam_by_finding[finding_id].append(candidate_id)
     findings = [
         {**finding, "poam_candidate_ids": sorted(poam_by_finding.get(finding.get("finding_id"), []))}
-        for finding in assessment.get("findings", [])
+        for finding in scoped_assessment.get("findings", [])
     ]
     return {
-        "profile": register_rows[0],
+        "profile": register_row,
         "tracker": {
             "profile": profile,
             "source": milestone_contract.get("source", {}),
@@ -2326,17 +2421,20 @@ def service_group_register_detail(
             "offset": library_offset,
         },
         "assessment": {
-            "assessment_run_id": assessment.get("assessment_run_id"),
-            "policy": assessment.get("policy"),
-            "summary": assessment.get("summary"),
-            "coverage_gaps": assessment.get("coverage_gaps", []),
+            "assessment_run_id": scoped_assessment.get("assessment_run_id"),
+            "canonical_assessment_run_id": canonical_assessment.get(
+                "assessment_run_id"
+            ),
+            "policy": scoped_assessment.get("policy"),
+            "summary": scoped_assessment.get("summary"),
+            "coverage_gaps": scoped_assessment.get("coverage_gaps", []),
             "findings": findings,
-            "poam_items": assessment.get("poam_items", []),
-            "poam_workstreams": assessment.get("poam_workstreams", []),
-            "portfolio_poam_items": assessment.get("portfolio_poam_items", []),
-            "portfolio_delivery_waves": assessment.get("portfolio_delivery_waves", []),
-            "limitations": assessment.get("limitations", []),
-            "disclaimer": assessment.get("disclaimer"),
+            "poam_items": canonical_poam_items,
+            "poam_workstreams": canonical_workstreams,
+            "portfolio_poam_items": canonical_portfolio_items,
+            "portfolio_delivery_waves": scoped_assessment.get("portfolio_delivery_waves", []),
+            "limitations": scoped_assessment.get("limitations", []),
+            "disclaimer": scoped_assessment.get("disclaimer"),
         },
         "candidate_only": True,
     }
@@ -2347,14 +2445,30 @@ def component_usage(
     component_id: int,
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-) -> list[dict[str, Any]]:
+    explicit_crypto_only: bool = False,
+    include_total: bool = False,
+) -> list[dict[str, Any]] | dict[str, Any]:
     component = _fetch_one("SELECT id FROM component WHERE id = %s", (component_id,))
     if not component:
         raise HTTPException(status_code=404, detail="Component not found")
-    return _fetch_all(
-        """
+    crypto_predicate = """
+        (
+            (dc.crypto_properties IS NOT NULL AND dc.crypto_properties <> '{}'::jsonb)
+            OR EXISTS (
+                SELECT 1 FROM component_property cp
+                WHERE cp.occurrence_id = dc.id
+                  AND lower(cp.property_name) = 'fedramp:fips:crypto-relevant'
+                  AND lower(trim(coalesce(cp.property_value, ''))) IN
+                      ('1', 'true', 'yes', 'on', 'enabled', 'validated')
+            )
+        )
+    """
+    crypto_clause = f" AND {crypto_predicate}" if explicit_crypto_only else ""
+    page_size = min(limit, _max_page_size())
+    rows = _fetch_all(
+        f"""
         SELECT dc.id AS occurrence_id, dc.bom_ref, dc.source_bom_ref,
-               dc.scope, dc.is_subject,
+               dc.scope, dc.is_subject, {crypto_predicate} AS explicit_crypto,
                d.id AS document_id, d.document_kind, d.spec_version,
                array_agg(
                    DISTINCT sc.slug || '/' || sg.display_name
@@ -2370,13 +2484,25 @@ def component_usage(
         JOIN source_file sf ON sf.document_id = d.id
         JOIN source_collection sc ON sc.id = sf.source_collection_id
         JOIN service_group sg ON sg.id = sf.service_group_id
-        WHERE dc.component_id = %s AND sf.is_present
+        WHERE dc.component_id = %s AND sf.is_present {crypto_clause}
         GROUP BY dc.id, d.id
         ORDER BY d.id
         LIMIT %s OFFSET %s
         """,
-        (component_id, limit, offset),
+        (component_id, page_size, offset),
     )
+    if not include_total:
+        return rows
+    count_row = _fetch_one(
+        f"""
+        SELECT count(DISTINCT dc.id) AS total
+        FROM document_component dc
+        JOIN source_file sf ON sf.document_id = dc.document_id
+        WHERE dc.component_id = %s AND sf.is_present {crypto_clause}
+        """,
+        (component_id,),
+    )
+    return {"items": rows, "total": int((count_row or {}).get("total") or 0), "limit": page_size, "offset": offset}
 
 
 @app.get("/api/v1/artifacts", tags=["artifacts"])
@@ -2757,15 +2883,9 @@ def _shape_fips_assessment(
     candidate_overlays: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     result = {key: value for key, value in assessment.items() if key != "findings"}
-    candidate_overlays = candidate_overlays or {}
-    candidates = []
-    for source in assessment.get("poam_items", []):
-        item = dict(source)
-        overlay = candidate_overlays.get(str(item.get("poam_candidate_id") or ""))
-        if overlay:
-            item.update(overlay.get("payload") or {})
-            item["admin_overlay"] = overlay
-        candidates.append(item)
+    candidates = _apply_candidate_overlays(
+        assessment.get("poam_items", []), candidate_overlays
+    )
     if query:
         normalized = query.casefold()
         candidates = [
@@ -2891,7 +3011,11 @@ def fips_poam_export(
 ) -> Response:
     """Export deduplicated draft POA&M candidates; no review decision is implied."""
     assessment, revision, _ = _cached_fips_assessment(source_collection, service_group)
-    content = render_poam_csv(assessment["poam_items"])
+    content = render_poam_csv(
+        _apply_candidate_overlays(
+            assessment["poam_items"], _active_overlay_map("poam_candidate")
+        )
+    )
     assessment_date = assessment["policy"]["assessment_date"]
     filename = f"fips-140-3-poam-candidates-{assessment_date}.csv"
     return Response(
@@ -2955,11 +3079,14 @@ def fips_compliance_package_export(
     """Export a checksum-manifested candidate package for compliance review."""
     assessment, revision, _ = _cached_fips_assessment(source_collection, service_group)
     assessment_date = assessment["policy"]["assessment_date"]
+    effective_poam_items = _apply_candidate_overlays(
+        assessment["poam_items"], _active_overlay_map("poam_candidate")
+    )
     members: dict[str, bytes] = {
         "poam-portfolio-candidates.csv": render_portfolio_poam_csv(
             assessment.get("portfolio_poam_items", [])
         ).encode(),
-        "poam-asset-candidates.csv": render_poam_csv(assessment["poam_items"]).encode(),
+        "poam-asset-candidates.csv": render_poam_csv(effective_poam_items).encode(),
         "poam-workstream-review.csv": render_workstream_csv(
             assessment.get("poam_workstreams", [])
         ).encode(),

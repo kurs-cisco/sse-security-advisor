@@ -177,10 +177,12 @@ function ResultPanel({ batch }: { batch: IngestionBatch }) {
     return <div className="ingestion-empty"><Clock3 size={20} /><p>Results appear after validation completes.</p></div>;
   }
   const comparison = result.comparison;
+  const succeeded = batch.state === "succeeded";
+  const failed = batch.state === "failed" || batch.state === "expired";
   return <div className="ingestion-results">
-    <div className="ingestion-result-banner">
-      <CheckCircle2 size={18} />
-      <div><strong>{result.catalog_changes_applied ? "Catalog updated" : "Dry run completed without catalog changes"}</strong><span>{result.checksum_verified_files ?? batch.verified_file_count} checksums verified</span></div>
+    <div className={`ingestion-result-banner${failed ? " ingestion-result-failed" : ""}`} role={failed ? "alert" : "status"}>
+      {failed ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
+      <div><strong>{failed ? "Batch did not complete" : succeeded ? result.catalog_changes_applied ? "Catalog updated" : "Dry run completed without catalog changes" : "Batch result is still pending"}</strong><span>{result.checksum_verified_files ?? batch.verified_file_count} checksums verified</span></div>
     </div>
     {result.inventory && <div className="result-metrics">
       <div><span>Files</span><strong>{result.inventory.total_files.toLocaleString()}</strong></div>
@@ -208,6 +210,7 @@ function ResultPanel({ batch }: { batch: IngestionBatch }) {
 
 export function IngestionWorkspace({ operatorReady }: { operatorReady: boolean }) {
   const directoryInput = useRef<HTMLInputElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
   const [batches, setBatches] = useState<IngestionBatch[]>([]);
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
   const [selectedBatch, setSelectedBatch] = useState<IngestionBatch | null>(null);
@@ -216,6 +219,7 @@ export function IngestionWorkspace({ operatorReady }: { operatorReady: boolean }
   const [sourceCollection, setSourceCollection] = useState("sse-cboms");
   const [dryRun, setDryRun] = useState(true);
   const [authoritativeSnapshot, setAuthoritativeSnapshot] = useState(false);
+  const [authoritativeConfirmation, setAuthoritativeConfirmation] = useState("");
   const [error, setError] = useState("");
   const [loadingJobs, setLoadingJobs] = useState(true);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -297,7 +301,11 @@ export function IngestionWorkspace({ operatorReady }: { operatorReady: boolean }
       setError("Source collection must be a lowercase slug using letters, numbers, and hyphens");
       return;
     }
-    if (!dryRun && !window.confirm("This run will update catalog data after validation. Continue?")) return;
+    if (!dryRun && authoritativeSnapshot && authoritativeConfirmation !== sourceCollection) {
+      setError(`Type ${sourceCollection} to confirm this complete authoritative snapshot.`);
+      return;
+    }
+    if (!dryRun && !window.confirm(authoritativeSnapshot ? `Apply this complete authoritative snapshot to ${sourceCollection}? Paths absent from this manifest will be marked historical.` : "This run will update catalog data after validation. Continue?")) return;
 
     try {
       const manifestFiles: ManifestFile[] = [];
@@ -370,6 +378,8 @@ export function IngestionWorkspace({ operatorReady }: { operatorReady: boolean }
       await loadBatch(batch.id);
       setFiles([]);
       if (directoryInput.current) directoryInput.current.value = "";
+      if (fileInput.current) fileInput.current.value = "";
+      setAuthoritativeConfirmation("");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The ingestion batch could not be started");
       await loadJobs();
@@ -395,10 +405,12 @@ export function IngestionWorkspace({ operatorReady }: { operatorReady: boolean }
         <div className="ingestion-form">
           <label>Source collection<input value={sourceCollection} onChange={(event) => setSourceCollection(event.target.value.toLocaleLowerCase())} disabled={busy} /></label>
           <label className="folder-picker"><FolderOpen size={18} /><span><strong>{files.length ? `${files.length.toLocaleString()} supported files selected` : "Choose folder"}</strong><small>{files.length ? `${formatBytes(totalSelectedBytes)} · .json and .csv only` : "The raw files upload directly from your browser to S3"}</small></span><input ref={directoryInput} type="file" multiple accept=".json,.csv,application/json,text/csv" onChange={(event) => chooseFiles(event.target.files)} disabled={busy} /></label>
+          <label className="ingestion-file-fallback"><span>Folder selection unavailable?</span><input ref={fileInput} type="file" multiple accept=".json,.csv,application/json,text/csv" onChange={(event) => chooseFiles(event.target.files)} disabled={busy} />Choose individual files</label>
           <div className="ingestion-options">
             <label className="check-option"><input type="checkbox" checked={dryRun} onChange={(event) => { setDryRun(event.target.checked); if (event.target.checked) setAuthoritativeSnapshot(false); }} disabled={busy} /><span><strong>Dry run</strong><small>Validate and compare without changing catalog data.</small></span></label>
-            <label className="check-option"><input type="checkbox" checked={authoritativeSnapshot} onChange={(event) => setAuthoritativeSnapshot(event.target.checked)} disabled={busy || dryRun} /><span><strong>Authoritative snapshot</strong><small>Mark absent paths historical. Use only for a complete collection.</small></span></label>
+            <label className="check-option"><input type="checkbox" checked={authoritativeSnapshot} onChange={(event) => { setAuthoritativeSnapshot(event.target.checked); if (!event.target.checked) setAuthoritativeConfirmation(""); }} disabled={busy || dryRun} /><span><strong>Authoritative snapshot</strong><small>Mark absent paths historical. Use only for a complete collection.</small></span></label>
           </div>
+          {!dryRun && authoritativeSnapshot ? <label className="authoritative-confirmation">Type <code>{sourceCollection}</code> to confirm the collection is complete.<input value={authoritativeConfirmation} onChange={(event) => setAuthoritativeConfirmation(event.target.value)} disabled={busy} /></label> : null}
           {busy && <div className="pipeline-progress" aria-live="polite"><div><span>{progress.message}</span><strong>{pipelinePercent}%</strong></div><div className="progress-track"><div className="progress-fill" style={{ width: `${pipelinePercent}%` }} /></div></div>}
           {!operatorReady && <p className="ingestion-operator-note"><AlertTriangle size={14} />A provisioned OIDC administrator is required to start cloud ingestion. Local development can inspect job history and results.</p>}
           <button className="primary-button ingestion-start" onClick={() => void startIngestion()} disabled={busy || !files.length || !operatorReady}><UploadCloud size={16} />{dryRun ? "Upload and start dry run" : "Upload and ingest"}</button>
@@ -432,7 +444,7 @@ export function IngestionWorkspace({ operatorReady }: { operatorReady: boolean }
       <div className="job-output-grid">
         <section><div className="output-heading"><h4><CheckCircle2 size={17} />Results</h4></div><ResultPanel batch={selectedBatch} /></section>
         <section><div className="output-heading"><h4><TerminalSquare size={17} />Task logs</h4><button className="text-link" onClick={() => void loadBatch(selectedBatch.id)}>Refresh</button></div>
-          <div className="job-logs" role="log" aria-live="polite">
+          <div className="job-logs" role="log" aria-live="off" aria-label="Task logs; updates are available when refreshed">
             {logs?.items.length ? logs.items.map((event, index) => <div key={`${event.timestamp ?? 0}-${index}`}><time>{event.timestamp ? formatTime(event.timestamp) : ""}</time><span>{event.message}</span></div>) : <div className="log-empty">{selectedBatch.ecs_task_arn ? "Waiting for task output…" : "Logs become available after the ECS task starts."}</div>}
           </div>
           {logs?.log_stream && <code className="log-stream">{logs.log_stream}</code>}

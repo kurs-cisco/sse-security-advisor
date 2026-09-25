@@ -27,17 +27,21 @@ function baseName(path: string | undefined) { return path?.split("/").at(-1)?.re
 function documentStatus(document: ApiDocument): InventoryStatus { return document.document_kind ? "ready" : "needs-evidence"; }
 
 function mapDocument(document: ApiDocument): ServiceInventory {
+  const groups = [...new Set((document.service_groups ?? []).map(serviceGroupFromReference))];
+  const provenancePaths = document.source_paths ?? [];
   return {
     id: `doc-${document.document_id}`,
     service: baseName(document.source_paths?.[0]),
-    group: serviceGroupFromReference(document.service_groups?.[0]),
+    group: groups[0] ?? "Unassigned",
+    groups,
     kind: document.document_kind === "cbom" ? "CBOM" : document.document_kind === "sbom" ? "SBOM" : document.document_kind === "cyclonedx" ? "CycloneDX" : document.document_kind === "spdx" ? "SPDX" : document.document_kind === "tool_summary" ? "Tool summary" : "Evidence",
     format: [document.format_name, document.spec_version].filter(Boolean).join(" ") || "Unspecified",
     cryptoComponents: document.crypto_component_occurrences ?? 0,
     libraries: document.unique_crypto_libraries ?? 0,
     checksum: document.sha256 ? `sha256:${document.sha256}` : "—",
     observedAt: document.generated_at_text ?? "",
-    provenance: document.source_paths?.[0] ?? "—",
+    provenance: provenancePaths[0] ?? "—",
+    provenancePaths,
     status: documentStatus(document),
   };
 }

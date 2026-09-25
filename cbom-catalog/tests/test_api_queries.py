@@ -214,11 +214,20 @@ class ApiQueryTests(unittest.TestCase):
     def test_fips_csv_is_a_draft_attachment_with_a_date_specific_filename(self) -> None:
         assessment = {
             "policy": {"assessment_date": "2026-09-18"},
-            "poam_items": [{"poam_candidate_id": "FIPS3-EXAMPLE"}],
+            "poam_items": [{
+                "poam_candidate_id": "FIPS3-EXAMPLE",
+                "responsible_owner": "Evidence owner",
+            }],
         }
         with (
             patch.object(api, "_cached_fips_assessment", return_value=(assessment, 7, False)) as load,
-            patch.object(api, "render_poam_csv", return_value="POA&M ID\\r\\nFIPS3-EXAMPLE\\r\\n"),
+            patch.object(api, "_active_overlay_map", return_value={
+                "FIPS3-EXAMPLE": {
+                    "version": 2,
+                    "payload": {"responsible_owner": "Reviewed owner"},
+                }
+            }),
+            patch.object(api, "render_poam_csv", return_value="POA&M ID\\r\\nFIPS3-EXAMPLE\\r\\n") as render,
         ):
             response = api.fips_poam_export("collection-a", "team")
 
@@ -229,6 +238,10 @@ class ApiQueryTests(unittest.TestCase):
             'attachment; filename="fips-140-3-poam-candidates-2026-09-18.csv"',
         )
         self.assertIn(b"FIPS3-EXAMPLE", response.body)
+        self.assertEqual(render.call_args.args[0][0]["responsible_owner"], "Reviewed owner")
+        self.assertEqual(
+            assessment["poam_items"][0]["responsible_owner"], "Evidence owner"
+        )
 
     def test_compliance_package_has_candidate_manifest_and_both_poam_views(self) -> None:
         assessment = {
@@ -242,6 +255,7 @@ class ApiQueryTests(unittest.TestCase):
         }
         with (
             patch.object(api, "_cached_fips_assessment", return_value=(assessment, 9, False)),
+            patch.object(api, "_active_overlay_map", return_value={}),
             patch.object(api, "render_poam_csv", return_value="asset\r\n"),
             patch.object(api, "render_portfolio_poam_csv", return_value="portfolio\r\n"),
             patch.object(api, "render_workstream_csv", return_value="workstream\r\n"),
@@ -348,6 +362,10 @@ class ApiQueryTests(unittest.TestCase):
                 "il2": {"raw_value": "1 Oct 2026", "status": "date", "date": "2026-10-01"},
                 "il5": {"raw_value": "", "status": "not_supplied", "date": None},
             }],
+            "target_modules": [{
+                "normalized_status": "asserted_not_compliant",
+                "verification": {"overall": {"state": "contradicted"}},
+            }],
         }]}
 
         service_impacts = {"collection-a/team": {
@@ -379,8 +397,119 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(row["risk_category"], "Critical")
         self.assertEqual(row["comments"], "Customer-facing service")
         self.assertEqual(row["coverage_gap_count"], 0)
+        self.assertEqual(row["target_module_review_count"], 1)
+        self.assertEqual(row["target_module_asserted_not_compliant_count"], 1)
+        self.assertEqual(row["target_module_verification_conflict_count"], 1)
         self.assertEqual(row["service_impact_evidence_grade"], "user_asserted")
         self.assertTrue(row["service_impact_review_required"])
+
+    def test_service_group_overlays_apply_to_register_and_detail_copies(self) -> None:
+        rows = [{
+            "service_key": "collection-a/team",
+            "effective_owners": ["Evidence owner"],
+            "leads": ["Evidence lead"],
+            "il2": {"state": "done", "farthest_date": None},
+            "il5": {"state": "not_supplied", "farthest_date": None},
+        }]
+        overlay = {
+            "version": 3,
+            "payload": {
+                "effective_owners": ["Reviewed owner"],
+                "il2_date": "2026-12-01",
+            },
+        }
+
+        result = api._apply_service_group_overlays(
+            rows, {"collection-a/team": overlay}
+        )
+
+        self.assertEqual(result[0]["effective_owners"], ["Reviewed owner"])
+        self.assertEqual(result[0]["owner_state"], "supplied")
+        self.assertEqual(result[0]["il2"]["farthest_date"], "2026-12-01")
+        self.assertTrue(result[0]["il2"]["admin_override"])
+        self.assertEqual(result[0]["admin_overlay"]["version"], 3)
+
+    def test_service_group_detail_uses_canonical_candidate_and_workstream_ids(self) -> None:
+        service_key = "collection-a/team"
+        canonical = {
+            "assessment_run_id": "RUN-CANONICAL",
+            "service_groups": [{
+                "service": service_key,
+                "service_group_name": "Team",
+                "documents": 1,
+                "finding_count": 1,
+            }],
+            "coverage_gaps": [],
+            "poam_items": [{
+                "poam_candidate_id": "FIPS3-CANONICAL",
+                "affected_services": [service_key, "collection-a/other"],
+                "linked_finding_ids": ["FINDING-1"],
+            }],
+            "poam_workstreams": [{
+                "workstream_id": "FIPSW-CANONICAL",
+                "affected_services": [service_key, "collection-a/other"],
+            }],
+            "portfolio_poam_items": [{
+                "portfolio_poam_id": "FIPSP-CANONICAL",
+                "affected_service_groups": [service_key],
+            }],
+        }
+        scoped = {
+            "assessment_run_id": "RUN-SCOPED",
+            "policy": {},
+            "summary": {},
+            "coverage_gaps": [],
+            "findings": [{"finding_id": "FINDING-1"}],
+            "poam_items": [{
+                "poam_candidate_id": "FIPS3-SCOPED-RECOMPUTED",
+                "affected_services": [service_key],
+                "linked_finding_ids": ["FINDING-1"],
+            }],
+        }
+        overview = {"service_groups": [{
+            "source_collection": "collection-a",
+            "slug": "team",
+            "display_name": "Team",
+        }]}
+        milestones = {"groups": [{
+            "service_group": "team",
+            "mapping_status": "mapped",
+            "owners": ["Owner"],
+            "leads": ["Lead"],
+            "tracker_rows": [],
+            "target_modules": [],
+        }]}
+
+        with (
+            patch.object(api, "_cached_fips_assessment", side_effect=[(scoped, 1, False), (canonical, 1, False)]),
+            patch.object(api, "_cached_catalog_value", return_value=(overview, 1, False)),
+            patch.object(api, "_active_target_module_contract", return_value=None),
+            patch.object(api, "team_milestones", return_value=milestones),
+            patch.object(api, "_active_service_impact_map", return_value={}),
+            patch.object(api, "_active_overlay_map", return_value={}),
+            patch.object(api, "_document_inventory_rows", return_value=([], 0)),
+            patch.object(api, "_component_inventory_rows", return_value=([], 0)),
+        ):
+            result = api.service_group_register_detail(
+                "collection-a", "team", 50, 0, 50, 0
+            )
+
+        self.assertEqual(
+            [item["poam_candidate_id"] for item in result["assessment"]["poam_items"]],
+            ["FIPS3-CANONICAL"],
+        )
+        self.assertEqual(
+            result["assessment"]["poam_workstreams"][0]["workstream_id"],
+            "FIPSW-CANONICAL",
+        )
+        self.assertEqual(
+            result["assessment"]["canonical_assessment_run_id"],
+            "RUN-CANONICAL",
+        )
+        self.assertEqual(
+            result["assessment"]["findings"][0]["poam_candidate_ids"],
+            ["FIPS3-CANONICAL"],
+        )
 
     def test_service_group_register_filters_missing_planning_dates(self) -> None:
         rows = [
@@ -414,6 +543,14 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(
             api._planning_summary(profile, "il5")["state"], "vendor_dependency"
         )
+
+        mixed_profile = {
+            "tracker_rows": [
+                {"team": "One", "il2": {"raw_value": "Done", "status": "done", "date": None}},
+                {"team": "Two", "il2": {"raw_value": "", "status": "not_supplied", "date": None}},
+            ]
+        }
+        self.assertEqual(api._planning_summary(mixed_profile, "il2")["state"], "done")
 
     def test_document_path_and_collection_use_the_same_provenance_row(self) -> None:
         with patch.object(api, "_fetch_all", return_value=[]) as fetch:
@@ -455,6 +592,30 @@ class ApiQueryTests(unittest.TestCase):
         self.assertIn("dc.crypto_properties", sql)
         self.assertIn("fedramp:fips:crypto-relevant", sql)
         self.assertEqual(params[:4], (7, "%openssl%", "%openssl%", "%openssl%"))
+
+    def test_document_components_can_return_total_without_changing_legacy_list_response(self) -> None:
+        with (
+            patch.object(api, "_fetch_one", side_effect=[{"id": 7}, {"total": 4}]),
+            patch.object(api, "_fetch_all", return_value=[{"occurrence_id": 1}]),
+        ):
+            result = api.document_components(document_id=7, include_total=True, limit=25, offset=0)
+
+        self.assertEqual(result["items"], [{"occurrence_id": 1}])
+        self.assertEqual(result["total"], 4)
+        self.assertEqual(result["limit"], 25)
+
+    def test_component_usage_explicit_filter_matches_library_aggregate_semantics(self) -> None:
+        with (
+            patch.object(api, "_fetch_one", side_effect=[{"id": 9}, {"total": 3}]),
+            patch.object(api, "_fetch_all", return_value=[{"occurrence_id": 1, "explicit_crypto": True}]) as fetch,
+        ):
+            result = api.component_usage(component_id=9, explicit_crypto_only=True, include_total=True, limit=25, offset=0)
+
+        sql, params = fetch.call_args.args
+        self.assertIn("fedramp:fips:crypto-relevant", sql)
+        self.assertIn("dc.component_id = %s AND sf.is_present", sql)
+        self.assertEqual(params, (9, 25, 0))
+        self.assertEqual(result["total"], 3)
 
     def test_component_aggregates_are_scoped_before_grouping(self) -> None:
         with patch.object(api, "_fetch_all", return_value=[]) as fetch:

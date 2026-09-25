@@ -31,6 +31,14 @@ export type ServiceGroupRegisterRow = {
     source_row: number;
     imported_at: string;
   } | null;
+  risk_authority: {
+    authority: string;
+    approved_on: string;
+    source_sha256: string;
+    source_row: number;
+    evidence_grade: "user_asserted";
+    review_required: true;
+  } | null;
   source_files: number;
   documents: number;
   documents_with_fips_evidence: number;
@@ -43,6 +51,9 @@ export type ServiceGroupRegisterRow = {
   candidate_findings: number;
   review_observations: number;
   finding_count: number;
+  target_module_review_count: number;
+  target_module_asserted_not_compliant_count: number;
+  target_module_verification_conflict_count: number;
   coverage_gap_states: string[];
   coverage_gap_count: number;
   poam_candidate_ids: string[];
@@ -58,6 +69,19 @@ export type ServiceGroupRegisterRow = {
     farthest_explicit_il2_date: string | null;
     raw_il2_values: string[];
   };
+};
+
+export type TargetModulePlanningRecord = {
+  team?: string | null;
+  current_module: string | null;
+  current_version: string | null;
+  target_module: string | null;
+  asserted_status: string | null;
+  normalized_status: string;
+  target_disposition: string;
+  disposition_basis: string;
+  record_sha256: string;
+  verification?: { overall?: { state?: string; review_required?: boolean } };
 };
 
 export type RegisterResponse = {
@@ -117,6 +141,7 @@ export type TrackerProfile = {
     cmvp_mapping?: string;
     cmvp_disposition?: { status: string; label: string; basis: string };
   }>;
+  target_modules?: TargetModulePlanningRecord[];
 };
 
 export type CandidateFinding = {
@@ -154,6 +179,8 @@ export type CandidatePoam = {
   scheduled_completion_date: string | null;
   milestone_mitigation_date?: string | null;
   linked_finding_count: number;
+  affected_services: string[];
+  affected_service_count?: number;
   remediation_plan: string;
 };
 
@@ -189,6 +216,7 @@ export type ServiceGroupDetail = {
   libraries: { items: CryptoLibrary[]; total: number; limit: number; offset: number };
   assessment: {
     assessment_run_id: string;
+    canonical_assessment_run_id: string | null;
     policy: { policy_version?: string; assessment_date?: string };
     coverage_gaps: CoverageGap[];
     findings: CandidateFinding[];

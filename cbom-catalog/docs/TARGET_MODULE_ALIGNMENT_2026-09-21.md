@@ -17,7 +17,7 @@ evidence is called out rather than omitted. The obsolete `apix` planning alias
 is collapsed into canonical `apix-no-cbom` and does not create a duplicate row.
 
 Source fingerprint:
-`158c2d2c82ff1b1e3a7e57bb1e95edad16f1c670e4f9223c4ccffaf847c6d45c`.
+`d113d40fc5d722fda1611b70b207aa38fe978989486d63e5de7935ba3e2478e8`.
 The source declares retrieval date `2026-09-24`, 39 teams, and 76 module rows.
 Planning values are authoritative from GitHub PR #1 at commit
 `a57eaba9`; the superseded engineering milestone tracker document is not used
@@ -51,14 +51,21 @@ in more than one disposition because its module rows may have different plans.
 This is expected and must not be collapsed into a single team-level compliance
 status.
 
-## Material corrections versus the prior tracker model
+## Material corrections versus the prior imported module snapshot
 
-- Android now supplies explicit IL2 and IL5 dates of `2026-10-31`; the older row
-  treated them as not applicable.
-- Avengers / FRUP and SCC no longer supply the October dates present in the
-  prior model, so they remain uncommitted until confirmed.
-- VA supplies an explicit `2027-03-31` commitment rather than a partial month.
-- ZTA-CALP supplies `2026-09-22` without the ignored `+1w lead time` phrase.
+PR #1 is authoritative for planning fields even when the module-inventory JSON
+contains an older value. The current API contract therefore applies these
+approved corrections:
+
+- Android IL2 and IL5 are `NA (Play Store)`, not October dates.
+- Avengers / FRUP IL2 and IL5 are `2026-10-12`.
+- SCC IL2 and IL5 are `2026-10-31`; its two source rows remain one planning row.
+- VA IL5 remains the partial-month commitment `March 2027`; it is not promoted
+  to an exact March 31 date.
+- ZTA-CALP retains `2026-09-22 + 1w lead time`; the explicit date is usable for
+  scheduling while the complete owner-supplied phrase remains visible.
+- Resource Discovery remains merged with Discovery, preserving Ashok and Rakesh
+  Muthusamy in the effective planning context without inventing a module row.
 - SWG Proxy is no longer one generic pipeline mapping: its rows include three
   asserted active-certificate records and a separate non-compliant OpenSSL /
   Bouncy Castle record.

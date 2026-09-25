@@ -261,6 +261,11 @@ export type TeamMilestoneProfile = {
   empty_service_category: boolean;
   owners: string[];
   leads: string[];
+  delivery_wave: Omit<DeliveryWave, "service_group_count" | "service_groups"> & {
+    farthest_explicit_il2_date: string | null;
+    raw_il2_values: string[];
+  };
+  target_modules: TargetModuleRecord[];
   tracker_rows: TeamTrackerRow[];
 };
 

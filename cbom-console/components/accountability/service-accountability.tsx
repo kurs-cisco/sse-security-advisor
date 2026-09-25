@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/app/components/ui/badge";
 import { getDocumentCryptoComponents, getServiceGroupDetail, getServiceGroupRegister } from "@/components/accountability/accountability-data";
-import type { CatalogDocument, CryptoComponent, PlanningSummary, ServiceGroupDetail, ServiceGroupRegisterRow } from "@/components/accountability/types";
+import type { CatalogDocument, CryptoComponent, PlanningSummary, ServiceGroupDetail, ServiceGroupRegisterRow, TargetModulePlanningRecord } from "@/components/accountability/types";
 
 type Direction = "asc" | "desc";
 type SortKey = "effective_owner" | "service_group" | "lead" | "il2" | "il5" | "documents" | "libraries" | "findings" | "poam";
@@ -32,11 +32,33 @@ function ownerGroupId(owner: string) {
 
 function PlanningCell({ plan, label }: { plan: PlanningSummary; label: string }) {
   const title = plan.entries.map((entry) => `${entry.team}: ${entry.raw_value || "Not supplied"}`).join("\n");
-  if (plan.state === "done") return <Badge tone="success">TRACKER: DONE</Badge>;
+  // Tracker values are planning assertions.  They must not look like a CBOM
+  // assessment conclusion or a verified migration outcome.
+  if (plan.state === "done") return <Badge tone="neutral">{label}: Done</Badge>;
   if (plan.state === "vendor_dependency") return <Badge tone="warning">VENDOR DEPENDENCY</Badge>;
   if (plan.state === "not_applicable") return <Badge tone="neutral">NA</Badge>;
   if (plan.state !== "dated") return <span title={title} className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs font-medium text-amber-700 dark:text-amber-300"><CircleAlert className="size-3.5" />Date missing</span>;
-  return <div title={title}><span className="whitespace-nowrap font-mono text-xs text-foreground">{formatDate(plan.farthest_date)}</span>{plan.explicit_dates.length > 1 ? <span className="mt-1 block text-[11px] text-muted-foreground">{plan.explicit_dates.length} {label} dates · farthest shown</span> : null}</div>;
+  return <div title={title}><span className="whitespace-nowrap font-mono text-xs text-foreground">{label}: {formatDate(plan.explicit_dates[0])}</span>{plan.explicit_dates.length > 1 ? <span className="mt-1 block text-[11px] text-muted-foreground">Latest {label}: {formatDate(plan.farthest_date)} · {plan.explicit_dates.length} dates</span> : null}</div>;
+}
+
+function verificationTone(value: string | undefined): "success" | "warning" | "danger" | "neutral" {
+  if (value === "corroborated") return "success";
+  if (value === "contradicted" || value === "conflicting_evidence") return "danger";
+  if (value === "partially_corroborated" || value === "not_observed") return "warning";
+  return "neutral";
+}
+
+function targetPlanningConcerns(modules: TargetModulePlanningRecord[]) {
+  return modules.filter((module) => module.normalized_status === "asserted_not_compliant" || ["contradicted", "conflicting_evidence"].includes(module.verification?.overall?.state || ""));
+}
+
+function TargetPlanningAssertions({ modules }: { modules: TargetModulePlanningRecord[] }) {
+  const concerns = targetPlanningConcerns(modules);
+  if (!concerns.length) return null;
+  return <div className="workstream-list"><h4>Target-module planning assertions — not assessment findings</h4>{concerns.map((module, index) => {
+    const verification = module.verification?.overall?.state || "not_assessable";
+    return <article key={module.record_sha256 || `${module.team}-${index}`}><div><Badge tone="warning">User asserted</Badge><Badge tone={verificationTone(verification)}>{verification.replaceAll("_", " ")}</Badge></div><strong>{module.current_module || "Current module not supplied"} → {module.target_module || "Target module not supplied"}</strong><span>{module.team || "Team not supplied"} · {module.asserted_status || module.normalized_status.replaceAll("_", " ")}</span></article>;
+  })}</div>;
 }
 
 function riskTone(value: string | null): "neutral" | "info" | "warning" | "danger" | "success" {
@@ -51,7 +73,7 @@ function riskTone(value: string | null): "neutral" | "info" | "warning" | "dange
 
 function SortButton({ id, active, direction, children, onSort }: { id: SortKey; active: SortKey; direction: Direction; children: React.ReactNode; onSort: (id: SortKey) => void }) {
   const Icon = active === id && direction === "desc" ? ArrowDown : ArrowUp;
-  return <button type="button" className="inline-flex items-center gap-1 whitespace-nowrap font-semibold tracking-[.07em] text-muted-foreground hover:text-foreground" onClick={() => onSort(id)}>{children}<Icon className={`size-3 ${active === id ? "opacity-100" : "opacity-25"}`} /></button>;
+  return <button type="button" aria-label={`Sort by ${typeof children === "string" ? children : "column"}${active === id ? `, ${direction === "asc" ? "ascending" : "descending"}` : ""}`} className="inline-flex items-center gap-1 whitespace-nowrap font-semibold tracking-[.07em] text-muted-foreground hover:text-foreground" onClick={() => onSort(id)}>{children}<Icon className={`size-3 ${active === id ? "opacity-100" : "opacity-25"}`} /></button>;
 }
 
 export function ServiceAccountability() {
@@ -65,8 +87,10 @@ export function ServiceAccountability() {
   const [il2State, setIl2State] = React.useState("");
   const [il5State, setIl5State] = React.useState("");
   const [action, setAction] = React.useState("");
-  const [sort, setSort] = React.useState<SortKey>("effective_owner");
-  const [direction, setDirection] = React.useState<Direction>("asc");
+  const [sort, setSort] = React.useState<SortKey>("findings");
+  const [direction, setDirection] = React.useState<Direction>("desc");
+  const [page, setPage] = React.useState(0);
+  const [groupByOwner, setGroupByOwner] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState("");
   const [selected, setSelected] = React.useState<ServiceGroupRegisterRow | null>(null);
@@ -95,13 +119,13 @@ export function ServiceAccountability() {
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       setLoading(true); setError("");
-      void getServiceGroupRegister({ query, owner, lead, il2State, il5State, action, sort, direction, page: 0, pageSize: 250, signal: controller.signal })
+      void getServiceGroupRegister({ query, owner, lead, il2State, il5State, action, sort, direction, page, pageSize: 50, signal: controller.signal })
         .then((result) => { setRows(result.items); setTotal(result.total); setOwners(result.filter_options.owners); setLeads(result.filter_options.leads); })
         .catch((reason: Error) => { if (reason.name !== "AbortError") { setRows([]); setError(reason.message); } })
         .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     }, query ? 250 : 0);
     return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [query, owner, lead, il2State, il5State, action, sort, direction, revision]);
+  }, [query, owner, lead, il2State, il5State, action, sort, direction, page, revision]);
 
   const grouped = React.useMemo(() => {
     const groups = new Map<string, ServiceGroupRegisterRow[]>();
@@ -111,10 +135,12 @@ export function ServiceAccountability() {
     }
     return [...groups.entries()];
   }, [rows]);
+  const renderedGroups: Array<[string, ServiceGroupRegisterRow[]]> = groupByOwner ? grouped : [["All scoped service groups", rows]];
   const hasFilters = Boolean(query || owner || lead || il2State || il5State || action);
   const allOwnersCollapsed = grouped.length > 0 && grouped.every(([groupOwner]) => collapsedOwners.has(groupOwner));
   const toggleSort = (next: SortKey) => { if (sort === next) setDirection((value) => value === "asc" ? "desc" : "asc"); else { setSort(next); setDirection(next === "findings" || next === "poam" || next === "documents" || next === "libraries" ? "desc" : "asc"); } };
-  const reset = () => { setQuery(""); setOwner(""); setLead(""); setIl2State(""); setIl5State(""); setAction(""); };
+  const reset = () => { setQuery(""); setOwner(""); setLead(""); setIl2State(""); setIl5State(""); setAction(""); setPage(0); };
+  const applyActionPreset = (nextAction: string) => { setAction(nextAction); setPage(0); };
   const toggleOwner = (groupOwner: string) => setCollapsedOwners((current) => {
     const next = new Set(current);
     if (next.has(groupOwner)) next.delete(groupOwner);
@@ -126,49 +152,56 @@ export function ServiceAccountability() {
   return <div className="accountability-workbench">
     <section className="page-heading inventory-heading">
       <div><p className="eyebrow">Ownership and remediation intelligence</p><h1>Service accountability</h1><p className="page-subtitle">Trace each scoped service group from Team Tracker planning context to catalog evidence, candidate crypto libraries, findings, and draft POA&amp;M mappings.</p></div>
-      <div className="heading-actions"><Badge tone={error ? "danger" : loading ? "neutral" : "success"}>{error ? "Data unavailable" : loading ? "Loading register" : "Live catalog"}</Badge><button className="refresh-button" type="button" disabled={loading} onClick={() => setRevision((value) => value + 1)}><RefreshCw className={loading ? "spin" : ""} size={17} />Refresh</button></div>
+      <div className="heading-actions"><Badge tone={error ? "danger" : loading ? "neutral" : "success"}>{error ? "Data unavailable" : loading ? "Loading register" : "Register loaded"}</Badge><button className="refresh-button" type="button" disabled={loading} onClick={() => setRevision((value) => value + 1)}><RefreshCw className={loading ? "spin" : ""} size={17} />Refresh</button></div>
     </section>
 
     <section className="rounded-2xl border border-border bg-card shadow-sm" aria-label="Service accountability register">
       <div className="accountability-toolbar">
-        <label className="accountability-search"><Search /><span className="sr-only">Search service accountability</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search group, owner, risk, comment, POA&M or workstream…" /></label>
-        <select aria-label="Filter by executive owner" value={owner} onChange={(event) => setOwner(event.target.value)}><option value="">All executive owners</option><option value="__missing__">Owner not supplied</option>{owners.map((value) => <option key={value}>{value}</option>)}</select>
-        <select aria-label="Filter by lead" value={lead} onChange={(event) => setLead(event.target.value)}><option value="">All leads</option><option value="__missing__">Lead not supplied</option>{leads.map((value) => <option key={value}>{value}</option>)}</select>
-        <select aria-label="Filter by IL2 plan" value={il2State} onChange={(event) => setIl2State(event.target.value)}><option value="">All IL2 plans</option><option value="dated">Explicit date</option><option value="done">Tracker: Done</option><option value="vendor_dependency">Vendor dependency</option><option value="not_supplied">Date missing</option><option value="non_date">Other non-date value</option><option value="not_applicable">Not applicable</option></select>
-        <select aria-label="Filter by IL5 plan" value={il5State} onChange={(event) => setIl5State(event.target.value)}><option value="">All IL5 plans</option><option value="dated">Explicit date</option><option value="done">Tracker: Done</option><option value="vendor_dependency">Vendor dependency</option><option value="not_supplied">Date missing</option><option value="non_date">Other non-date value</option><option value="not_applicable">Not applicable</option></select>
-        <select aria-label="Filter by candidate action" value={action} onChange={(event) => setAction(event.target.value)}><option value="">All candidate actions</option><option value="has_poam">Has draft POA&amp;M</option><option value="has_findings">Has findings</option><option value="review_only">Needs evidence review</option><option value="no_action">No mapped action</option></select>
+        <label className="accountability-search"><Search /><span className="sr-only">Search service accountability</span><input value={query} onChange={(event) => { setQuery(event.target.value); setPage(0); }} placeholder="Search group, owner, risk, comment, POA&M or workstream…" /></label>
+        <label>Executive owner<select value={owner} onChange={(event) => { setOwner(event.target.value); setPage(0); }}><option value="">All executive owners</option><option value="__missing__">Owner not supplied</option>{owners.map((value) => <option key={value}>{value}</option>)}</select></label>
+        <label>Lead<select value={lead} onChange={(event) => { setLead(event.target.value); setPage(0); }}><option value="">All leads</option><option value="__missing__">Lead not supplied</option>{leads.map((value) => <option key={value}>{value}</option>)}</select></label>
+        <label>IL2 plan<select value={il2State} onChange={(event) => { setIl2State(event.target.value); setPage(0); }}><option value="">All IL2 plans</option><option value="dated">Explicit date</option><option value="done">Done</option><option value="vendor_dependency">Vendor dependency</option><option value="not_supplied">Date missing</option><option value="non_date">Other non-date value</option><option value="not_applicable">Not applicable</option></select></label>
+        <label>IL5 plan<select value={il5State} onChange={(event) => { setIl5State(event.target.value); setPage(0); }}><option value="">All IL5 plans</option><option value="dated">Explicit date</option><option value="done">Done</option><option value="vendor_dependency">Vendor dependency</option><option value="not_supplied">Date missing</option><option value="non_date">Other non-date value</option><option value="not_applicable">Not applicable</option></select></label>
+        <label>Review status<select value={action} onChange={(event) => { setAction(event.target.value); setPage(0); }}><option value="">All review states</option><option value="has_poam">Has draft POA&amp;M</option><option value="has_findings">Has findings</option><option value="review_only">Needs evidence review</option><option value="no_action">No mapped action</option></select></label>
         <button type="button" className="secondary-button" disabled={!hasFilters} onClick={reset}><FilterX size={15} />Clear</button>
       </div>
-      <div className="accountability-summary"><span><strong className="text-foreground">{total}</strong> scoped service groups</span><div className="accountability-summary-actions"><span>Grouped by Executive owner <span className="hidden sm:inline">(effective owner from Team Tracker)</span></span><button type="button" className="owner-collapse-all" onClick={toggleAllOwners} disabled={!grouped.length} aria-label={allOwnersCollapsed ? "Expand all executive owner groups" : "Collapse all executive owner groups"}><ChevronsDownUp className="size-3.5" />{allOwnersCollapsed ? "Expand all" : "Collapse all"}</button></div></div>
-      <div className="accountability-table-scroll">
+      <div className="accountability-presets" aria-label="Review presets"><span>Start with:</span><button type="button" className={action === "review_only" ? "is-active" : ""} onClick={() => applyActionPreset("review_only")}>Evidence review</button><button type="button" className={action === "has_findings" ? "is-active" : ""} onClick={() => applyActionPreset("has_findings")}>Candidate findings</button><button type="button" className={action === "has_poam" ? "is-active" : ""} onClick={() => applyActionPreset("has_poam")}>Draft POA&amp;M</button></div>
+      <div className="accountability-summary"><span><strong className="text-foreground">{total ? `${page * 50 + 1}–${Math.min((page + 1) * 50, total)} of ${total}` : "0"}</strong> scoped service groups</span><div className="accountability-summary-actions"><label className="group-toggle"><input type="checkbox" checked={groupByOwner} onChange={(event) => setGroupByOwner(event.target.checked)} />Group by executive owner</label>{groupByOwner ? <button type="button" className="owner-collapse-all" onClick={toggleAllOwners} disabled={!grouped.length} aria-label={allOwnersCollapsed ? "Expand all executive owner groups" : "Collapse all executive owner groups"}><ChevronsDownUp className="size-3.5" />{allOwnersCollapsed ? "Expand all" : "Collapse all"}</button> : null}</div></div>
+      <div className="accountability-table-scroll" aria-busy={loading}>
         <table className="accountability-table">
-          <thead><tr><th><SortButton id="service_group" active={sort} direction={direction} onSort={toggleSort}>Service group</SortButton></th><th><SortButton id="lead" active={sort} direction={direction} onSort={toggleSort}>Lead</SortButton></th><th><SortButton id="il2" active={sort} direction={direction} onSort={toggleSort}>IL2 plan</SortButton></th><th><SortButton id="il5" active={sort} direction={direction} onSort={toggleSort}>IL5 plan</SortButton></th><th>POA&amp;M impact</th><th>Risk category</th><th>Comments</th><th><SortButton id="documents" active={sort} direction={direction} onSort={toggleSort}>Catalog evidence</SortButton></th><th><SortButton id="libraries" active={sort} direction={direction} onSort={toggleSort}>Crypto assets</SortButton></th><th><SortButton id="findings" active={sort} direction={direction} onSort={toggleSort}>Findings</SortButton></th><th><SortButton id="poam" active={sort} direction={direction} onSort={toggleSort}>Draft POA&amp;M</SortButton></th><th><span className="sr-only">Actions</span></th></tr></thead>
-          {grouped.map(([groupOwner, items]) => {
+          <thead><tr><th aria-sort={sort === "service_group" ? (direction === "asc" ? "ascending" : "descending") : "none"}><SortButton id="service_group" active={sort} direction={direction} onSort={toggleSort}>Service group</SortButton></th><th>Owner and lead</th><th aria-sort={sort === "il2" ? (direction === "asc" ? "ascending" : "descending") : "none"}><SortButton id="il2" active={sort} direction={direction} onSort={toggleSort}>Planning dates</SortButton></th><th aria-sort={sort === "documents" ? (direction === "asc" ? "ascending" : "descending") : "none"}><SortButton id="documents" active={sort} direction={direction} onSort={toggleSort}>Evidence</SortButton></th><th aria-sort={sort === "findings" ? (direction === "asc" ? "ascending" : "descending") : "none"}><SortButton id="findings" active={sort} direction={direction} onSort={toggleSort}>Review signals</SortButton></th><th>Open</th></tr></thead>
+          {renderedGroups.map(([groupOwner, items]) => {
             const isCollapsed = collapsedOwners.has(groupOwner);
             const groupId = ownerGroupId(groupOwner);
             return <tbody key={groupOwner} id={groupId} className={isCollapsed ? "accountability-owner-group is-collapsed" : "accountability-owner-group"}>
-              <tr className="owner-group-row"><td colSpan={12}><button type="button" className="owner-group-toggle" onClick={() => toggleOwner(groupOwner)} aria-expanded={!isCollapsed} aria-controls={groupId}><span className="owner-group-label"><ChevronRight className="size-4" /><UserRound className="size-4" /><span>Executive owner</span><strong>{groupOwner}</strong></span><small>{items.length} service group{items.length === 1 ? "" : "s"}</small></button></td></tr>
-              {!isCollapsed ? items.map((row) => <tr key={row.service_key} className="accountability-row"><td><button type="button" className="text-left" onClick={() => setSelected(row)}><strong>{row.display_name}</strong><span className="mono">{row.service_key}</span></button></td><td>{row.leads.length ? <span className="text-sm text-foreground">{row.leads.join(", ")}</span> : <span className="missing-value">Not supplied</span>}</td><td><PlanningCell plan={row.il2} label="IL2" /></td><td><PlanningCell plan={row.il5} label="IL5" /></td><td><button type="button" className="service-impact-cell" title={row.poam_impact || "Not supplied"} onClick={() => setSelected(row)}>{row.poam_impact || "Not supplied"}</button></td><td>{row.risk_category ? <Badge tone={riskTone(row.risk_category)}>{row.risk_category}</Badge> : <span className="service-impact-empty">Not supplied</span>}</td><td><button type="button" className="service-comment-cell" title={row.comments || "Not supplied"} onClick={() => setSelected(row)}>{row.comments || "Not supplied"}</button></td><td><button type="button" className="metric-link" onClick={() => setSelected(row)}><FileCode2 /><span><strong>{row.documents}</strong><small>{row.documents_with_fips_evidence}/{row.documents} with FIPS signals</small></span></button></td><td><div className="table-count"><strong>{row.candidate_crypto_assets}</strong><small>{row.candidate_crypto_libraries} librar{row.candidate_crypto_libraries === 1 ? "y" : "ies"}</small></div></td><td><div className="table-count"><strong className={row.finding_count ? "text-amber-700 dark:text-amber-300" : ""}>{row.finding_count}</strong><small>{row.review_observations} review-only</small></div></td><td><div className="table-count"><strong className={row.poam_candidate_count ? "text-primary" : ""}>{row.poam_candidate_count}</strong><small>{row.workstream_count} workstream{row.workstream_count === 1 ? "" : "s"}</small></div></td><td><button type="button" className="table-action" onClick={() => setSelected(row)}>Open <ChevronRight className="size-3.5" /></button></td></tr>) : null}
+              {groupByOwner ? <tr className="owner-group-row"><td colSpan={6}><button type="button" className="owner-group-toggle" onClick={() => toggleOwner(groupOwner)} aria-expanded={!isCollapsed} aria-controls={groupId}><span className="owner-group-label"><ChevronRight className="size-4" /><UserRound className="size-4" /><span>Executive owner</span><strong>{groupOwner}</strong></span><small>{items.length} service group{items.length === 1 ? "" : "s"}</small></button></td></tr> : null}
+              {!isCollapsed ? items.map((row) => <tr key={row.service_key} className="accountability-row"><td><strong>{row.display_name}</strong><span className="mono">{row.service_key}</span></td><td><strong className="text-sm">{ownerLabel(row)}</strong><span className="text-xs text-muted-foreground">{row.leads.join(", ") || "Lead not supplied"}</span></td><td><PlanningCell plan={row.il2} label="IL2" /><PlanningCell plan={row.il5} label="IL5" /></td><td><div className="table-count"><strong>{row.documents}</strong><small>{row.documents_with_fips_evidence}/{row.documents} documents with FIPS-related evidence · {row.candidate_crypto_assets} crypto assets</small></div></td><td><div className="table-count"><strong>{row.finding_count}</strong><small>{row.review_observations} evidence review · {row.poam_candidate_count} draft POA&amp;M</small>{row.target_module_asserted_not_compliant_count ? <small className="danger-text">{row.target_module_asserted_not_compliant_count} tracker assertion{row.target_module_asserted_not_compliant_count === 1 ? "" : "s"}</small> : null}</div></td><td><button type="button" className="table-action" onClick={() => setSelected(row)} aria-label={`Open details for ${row.display_name}`}>Details <ChevronRight className="size-3.5" /></button></td></tr>) : null}
             </tbody>;
           })}
         </table>
         {!loading && !rows.length ? <div className="px-6 py-16 text-center text-sm text-muted-foreground">{error ? <span role="alert" className="text-danger">Unable to load the live register: {error}</span> : "No service groups match the current filters."}</div> : null}
         {loading ? <div className="px-6 py-16 text-center text-sm text-muted-foreground">Loading service accountability…</div> : null}
       </div>
+      {!loading && total > 50 ? <nav className="accountability-pagination" aria-label="Service accountability pages"><button type="button" className="secondary-button" disabled={page === 0} onClick={() => setPage((value) => value - 1)}>Previous</button><span>Page {page + 1} of {Math.ceil(total / 50)}</span><button type="button" className="secondary-button" disabled={(page + 1) * 50 >= total} onClick={() => setPage((value) => value + 1)}>Next</button></nav> : null}
     </section>
-    <p className="mt-3 flex items-start gap-2 text-xs leading-5 text-muted-foreground"><ShieldCheck className="mt-0.5 size-4 shrink-0" />Owners and IL2/IL5 values are Team Tracker planning metadata. POA&amp;M impact, risk category, and comments are imported user assertions and do not change candidate findings or draft POA&amp;M mappings; all require authorized review.</p>
+    <p className="sr-only" role="status" aria-live="polite">{loading ? "Loading service accountability register" : error ? `Unable to load register: ${error}` : `Showing ${rows.length} service groups, page ${page + 1} of ${Math.max(1, Math.ceil(total / 50))}`}</p>
+    <p className="mt-3 flex items-start gap-2 text-xs leading-5 text-muted-foreground"><ShieldCheck className="mt-0.5 size-4 shrink-0" />Owners and IL2/IL5 values are Team Tracker planning metadata. POA&amp;M impact, service-impact risk, and comments are imported user assertions and do not change candidate findings or draft POA&amp;M mappings; all require authorized review.</p>
     {selected ? <ServiceGroupDrawer row={selected} onClose={() => setSelected(null)} /> : null}
   </div>;
 }
 
-function ServiceGroupDrawer({ row, onClose }: { row: ServiceGroupRegisterRow; onClose: () => void }) {
+export function ServiceGroupDrawer({ row, onClose }: { row: ServiceGroupRegisterRow; onClose: () => void }) {
   const [detail, setDetail] = React.useState<ServiceGroupDetail | null>(null);
   const [error, setError] = React.useState("");
   const [selectedDocument, setSelectedDocument] = React.useState<CatalogDocument | null>(null);
   const [components, setComponents] = React.useState<CryptoComponent[]>([]);
   const [componentsLoading, setComponentsLoading] = React.useState(false);
+  const [componentsError, setComponentsError] = React.useState("");
+  const [showAllLibraries, setShowAllLibraries] = React.useState(false);
+  const [showAllFindings, setShowAllFindings] = React.useState(false);
   const panelRef = React.useRef<HTMLElement>(null);
   const titleId = React.useId();
+  const descriptionId = React.useId();
 
   React.useEffect(() => {
     const controller = new AbortController();
@@ -178,23 +211,39 @@ function ServiceGroupDrawer({ row, onClose }: { row: ServiceGroupRegisterRow; on
   React.useEffect(() => {
     if (!selectedDocument) return;
     const controller = new AbortController();
-    void getDocumentCryptoComponents(selectedDocument.document_id, controller.signal).then(setComponents).catch(() => setComponents([])).finally(() => { if (!controller.signal.aborted) setComponentsLoading(false); });
+    void getDocumentCryptoComponents(selectedDocument.document_id, controller.signal).then(setComponents).catch((reason: Error) => { if (reason.name !== "AbortError") { setComponents([]); setComponentsError(reason.message || "The component request failed."); } }).finally(() => { if (!controller.signal.aborted) setComponentsLoading(false); });
     return () => controller.abort();
   }, [selectedDocument]);
   React.useEffect(() => {
     const prior = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    panelRef.current?.focus(); document.body.style.overflow = "hidden";
-    const keydown = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    const appRoot = document.querySelector("main");
+    const priorOverflow = document.body.style.overflow;
+    const priorPadding = document.body.style.paddingRight;
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+    document.body.style.overflow = "hidden";
+    if (scrollbarWidth) document.body.style.paddingRight = `${scrollbarWidth}px`;
+    appRoot?.setAttribute("inert", "");
+    const focusable = () => Array.from(panelRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])') ?? []).filter((node) => !node.hasAttribute("hidden"));
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); onClose(); return; }
+      if (event.key !== "Tab") return;
+      const nodes = focusable();
+      if (!nodes.length) { event.preventDefault(); panelRef.current?.focus(); return; }
+      const first = nodes[0]; const last = nodes[nodes.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
     document.addEventListener("keydown", keydown);
-    return () => { document.removeEventListener("keydown", keydown); document.body.style.overflow = ""; prior?.focus(); };
+    window.setTimeout(() => focusable()[0]?.focus() ?? panelRef.current?.focus(), 0);
+    return () => { document.removeEventListener("keydown", keydown); document.body.style.overflow = priorOverflow; document.body.style.paddingRight = priorPadding; appRoot?.removeAttribute("inert"); prior?.focus(); };
   }, [onClose]);
 
-  return <div className="drawer-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}><aside ref={panelRef} tabIndex={-1} className="service-drawer" role="dialog" aria-modal="true" aria-labelledby={titleId}>
-    <header className="service-drawer-header"><div><p className="eyebrow">Scoped service-group record</p><h2 id={titleId}>{row.display_name}</h2><p>{row.service_key}</p></div><button type="button" className="icon-button" onClick={onClose} aria-label="Close service details"><X /></button></header>
+  return <div className="drawer-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}><aside ref={panelRef} tabIndex={-1} className="service-drawer" role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={descriptionId}>
+    <header className="service-drawer-header"><div><p className="eyebrow">Scoped service-group record</p><h2 id={titleId}>{row.display_name}</h2><p id={descriptionId}>{row.service_key}. Planning metadata and candidate analysis require authorized review.</p></div><button type="button" className="icon-button" onClick={onClose} aria-label="Close service details"><X /></button></header>
     <div className="service-drawer-body">{error ? <div className="detail-error" role="alert">Unable to load service details: {error}</div> : !detail ? <div className="drawer-loading">Loading scoped evidence and planning context…</div> : <>
       <DrawerSection icon={BookOpenCheck} title="Scope and catalog coverage" subtitle="Coverage is inventory evidence, not proof of deployment or compliance.">
-        <div className="drawer-metric-grid"><DrawerMetric label="Catalog documents" value={String(detail.profile.documents)} /><DrawerMetric label="FIPS signal coverage" value={`${detail.profile.evidence_coverage_percent}%`} /><DrawerMetric label="Candidate crypto assets" value={String(detail.profile.candidate_crypto_assets)} /><DrawerMetric label="Ingest issues" value={String(detail.profile.ingest_issues)} /></div>
-        <div className="provenance-strip"><span>Assessment run <strong>{detail.assessment.assessment_run_id}</strong></span><span>Policy <strong>{detail.assessment.policy?.policy_version || "Not supplied"}</strong></span></div>
+        <div className="drawer-metric-grid"><DrawerMetric label="Catalog documents" value={String(detail.profile.documents)} /><DrawerMetric label="FIPS-related evidence coverage" value={`${detail.profile.evidence_coverage_percent}%`} /><DrawerMetric label="Candidate crypto assets" value={String(detail.profile.candidate_crypto_assets)} /><DrawerMetric label="Ingest issues" value={String(detail.profile.ingest_issues)} /></div>
+        <div className="provenance-strip"><span>Scoped findings run <strong>{detail.assessment.assessment_run_id}</strong></span><span>Canonical POA&amp;M run <strong>{detail.assessment.canonical_assessment_run_id || "Not supplied"}</strong></span><span>Policy <strong>{detail.assessment.policy?.policy_version || "Not supplied"}</strong></span></div>
       </DrawerSection>
 
       <DrawerSection icon={UsersRound} title="Ownership and planning context" subtitle="Effective owner and lead are derived from the reviewed Team Tracker mapping.">
@@ -204,26 +253,28 @@ function ServiceGroupDrawer({ row, onClose }: { row: ServiceGroupRegisterRow; on
       </DrawerSection>
 
       <DrawerSection icon={ClipboardList} title="Imported service-impact context" subtitle="User-asserted planning context from the selected spreadsheet columns; review required.">
-        <div className="service-impact-summary"><div><span>POA&amp;M impact</span><strong>{detail.profile.poam_impact || "Not supplied"}</strong></div><div><span>Risk category</span>{detail.profile.risk_category ? <Badge tone={riskTone(detail.profile.risk_category)}>{detail.profile.risk_category}</Badge> : <strong>Not supplied</strong>}</div><div><span>Comments</span><strong>{detail.profile.comments || "Not supplied"}</strong></div></div>
+        <div className="service-impact-summary"><div><span>POA&amp;M impact</span><strong>{detail.profile.poam_impact || "Not supplied"}</strong></div><div><span>Service impact risk</span>{detail.profile.risk_category ? <Badge tone={riskTone(detail.profile.risk_category)}>{detail.profile.risk_category}</Badge> : <strong>Not supplied</strong>}</div><div><span>Comments</span><strong>{detail.profile.comments || "Not supplied"}</strong></div></div>
+        {detail.profile.risk_authority ? <p className="source-note">Risk authority: {detail.profile.risk_authority.authority} · approved {detail.profile.risk_authority.approved_on} · <span className="font-mono">{detail.profile.risk_authority.source_sha256.slice(0, 16)}…</span></p> : null}
         {detail.profile.service_impact_source ? <p className="source-note">Source: {detail.profile.service_impact_source.source_filename} · row {detail.profile.service_impact_source.source_row} · <span className="font-mono">{detail.profile.service_impact_source.source_sha256.slice(0, 16)}…</span></p> : <p className="source-note">No service-impact row is mapped to this service group.</p>}
       </DrawerSection>
 
       <DrawerSection icon={LibraryBig} title="Candidate crypto libraries" subtitle="Library/framework records with explicit crypto metadata; other crypto asset types remain visible in each CBOM record below.">
-        <div className="library-list">{detail.libraries.items.slice(0, 12).map((library) => <article key={library.component_id}><div><strong>{library.name}</strong><span>{library.version || "Version not supplied"}</span></div><div><b>{library.document_count}</b><span>documents</span></div><div><b>{library.occurrence_count}</b><span>occurrences</span></div><code title={library.canonical_purl || ""}>{library.canonical_purl || "No canonical PURL"}</code></article>)}{!detail.libraries.items.length ? <div className="drawer-empty"><LibraryBig />No explicitly classified crypto libraries were returned.</div> : null}</div>
+        <div className="library-list">{detail.libraries.items.slice(0, showAllLibraries ? undefined : 12).map((library) => <article key={library.component_id}><div><strong>{library.name}</strong><span>{library.version || "Version not supplied"}</span></div><div><b>{library.document_count}</b><span>documents</span></div><div><b>{library.occurrence_count}</b><span>occurrences</span></div><code title={library.canonical_purl || ""}>{library.canonical_purl || "No canonical PURL"}</code></article>)}{!detail.libraries.items.length ? <div className="drawer-empty"><LibraryBig />No explicitly classified crypto libraries were returned.</div> : null}</div>{detail.libraries.items.length > 12 ? <button type="button" className="drawer-show-all" onClick={() => setShowAllLibraries((value) => !value)}>{showAllLibraries ? "Show first 12 libraries" : `Show all ${detail.libraries.items.length} libraries`}</button> : null}
       </DrawerSection>
 
       <DrawerSection icon={FileCode2} title="Catalog documents and CBOM links" subtitle="Open a source record to inspect its candidate crypto components and provenance.">
-        <div className="document-list">{detail.documents.items.map((document) => <button type="button" key={document.document_id} className={selectedDocument?.document_id === document.document_id ? "selected" : ""} onClick={() => { setComponents([]); setComponentsLoading(true); setSelectedDocument(document); }}><span className="document-kind">{document.document_kind}</span><span><strong>{document.source_paths?.[0]?.split("/").at(-1) || `Document ${document.document_id}`}</strong><small>{document.format_name} {document.spec_version} · {document.unique_crypto_components} crypto asset{document.unique_crypto_components === 1 ? "" : "s"} ({document.unique_crypto_libraries} librar{document.unique_crypto_libraries === 1 ? "y" : "ies"})</small></span><ChevronRight /></button>)}</div>
-        {selectedDocument ? <DocumentInspector document={selectedDocument} components={components} loading={componentsLoading} onClose={() => { setSelectedDocument(null); setComponents([]); }} /> : null}
+        <div className="document-list">{detail.documents.items.map((document) => <button type="button" key={document.document_id} className={selectedDocument?.document_id === document.document_id ? "selected" : ""} onClick={() => { setComponents([]); setComponentsError(""); setComponentsLoading(true); setSelectedDocument(document); }}><span className="document-kind">{document.document_kind}</span><span><strong>{document.source_paths?.[0]?.split("/").at(-1) || `Document ${document.document_id}`}</strong><small>{document.format_name} {document.spec_version} · {document.unique_crypto_components} crypto asset{document.unique_crypto_components === 1 ? "" : "s"} ({document.unique_crypto_libraries} librar{document.unique_crypto_libraries === 1 ? "y" : "ies"})</small></span><ChevronRight /></button>)}</div>
+        {selectedDocument ? <DocumentInspector document={selectedDocument} components={components} loading={componentsLoading} error={componentsError} onClose={() => { setSelectedDocument(null); setComponents([]); setComponentsError(""); }} /> : null}
       </DrawerSection>
 
       <DrawerSection icon={CircleAlert} title="Assessment observations and candidate findings" subtitle="Evidence requests remain separate from POA&M-eligible candidate findings.">
+        <TargetPlanningAssertions modules={detail.tracker.profile.target_modules ?? []} />
         {detail.assessment.coverage_gaps.length ? <div className="evidence-request-list"><h4>Evidence requests — not POA&amp;M eligible</h4>{detail.assessment.coverage_gaps.map((gap) => <article key={gap.observation_id}><Badge tone="warning">{gap.assertion_state.replaceAll("_", " ")}</Badge><strong>{gap.title}</strong><p>{gap.technical_observation}</p></article>)}</div> : null}
-        <div className="finding-list">{detail.assessment.findings.slice(0, 30).map((finding) => <article key={finding.finding_id}><div><Badge tone={finding.poam_eligible ? "warning" : "neutral"}>{finding.assertion_state.replaceAll("_", " ")}</Badge><code>{finding.rule_id}</code></div><strong>{finding.title}</strong><p>{finding.subject_name} · {finding.finding_id}</p>{finding.poam_candidate_ids.length ? <span>Mapped draft candidate: {finding.poam_candidate_ids.join(", ")}</span> : <span>No POA&amp;M mapping — evidence review only</span>}</article>)}{!detail.assessment.findings.length && !detail.assessment.coverage_gaps.length ? <div className="drawer-empty"><ShieldCheck />No candidate findings or evidence requests were returned for this scope.</div> : null}</div>
+        <div className="finding-list">{detail.assessment.findings.slice(0, showAllFindings ? undefined : 30).map((finding) => <article key={finding.finding_id}><div><Badge tone={finding.poam_eligible ? "warning" : "neutral"}>{finding.assertion_state.replaceAll("_", " ")}</Badge><code>{finding.rule_id}</code></div><strong>{finding.title}</strong><p>{finding.subject_name} · {finding.finding_id}</p>{finding.poam_candidate_ids.length ? <span>Mapped draft candidate: {finding.poam_candidate_ids.join(", ")}</span> : <span>No POA&amp;M mapping — evidence review only</span>}</article>)}{!detail.assessment.findings.length && !detail.assessment.coverage_gaps.length && !targetPlanningConcerns(detail.tracker.profile.target_modules ?? []).length ? <div className="drawer-empty"><ShieldCheck />No candidate findings, evidence requests, or target-module planning concerns were returned for this scope.</div> : null}</div>{detail.assessment.findings.length > 30 ? <button type="button" className="drawer-show-all" onClick={() => setShowAllFindings((value) => !value)}>{showAllFindings ? "Show first 30 findings" : `Show all ${detail.assessment.findings.length} findings`}</button> : null}
       </DrawerSection>
 
       <DrawerSection icon={CalendarClock} title="Draft POA&M mapping" subtitle="Candidate rows and operational workstreams require authorized merge and disposition review.">
-        <div className="poam-map-list">{detail.assessment.poam_items.map((item) => <article key={item.poam_candidate_id}><div><code>{item.poam_candidate_id}</code><Badge tone="info">{item.control_id}</Badge></div><strong>{item.title}</strong><p>{item.linked_finding_count} linked finding{item.linked_finding_count === 1 ? "" : "s"} · Proposed {item.proposed_risk} risk</p><span>IL2 mitigation date: {formatDate(item.milestone_mitigation_date || item.scheduled_completion_date)}</span></article>)}{!detail.assessment.poam_items.length ? <div className="drawer-empty"><ShieldCheck />No draft POA&amp;M candidate is mapped to this scope.</div> : null}</div>
+        <div className="poam-map-list">{detail.assessment.poam_items.map((item) => <article key={item.poam_candidate_id}><div><code>{item.poam_candidate_id}</code><Badge tone="info">{item.control_id}</Badge></div><strong>{item.title}</strong><p>{item.linked_finding_count} linked finding{item.linked_finding_count === 1 ? "" : "s"} across {item.affected_service_count ?? item.affected_services.length} service group{(item.affected_service_count ?? item.affected_services.length) === 1 ? "" : "s"} · Proposed {item.proposed_risk} risk</p><span>IL2 mitigation date: {formatDate(item.milestone_mitigation_date || item.scheduled_completion_date)}</span></article>)}{!detail.assessment.poam_items.length ? <div className="drawer-empty"><ShieldCheck />No draft POA&amp;M candidate is mapped to this scope.</div> : null}</div>
         {detail.assessment.poam_workstreams.length ? <div className="workstream-list"><h4>Operational grouping — merge review required</h4>{detail.assessment.poam_workstreams.map((item) => <article key={item.workstream_id}><code>{item.workstream_id}</code><strong>{item.title}</strong><span>{item.candidate_count} candidate rows · {item.status}</span></article>)}</div> : null}
       </DrawerSection>
     </>}</div>
@@ -240,6 +291,6 @@ function PlanDetail({ label, value }: { label: string; value: { raw_value: strin
   return <div className={value.date ? "plan-detail" : "plan-detail plan-missing"}><span>{label}</span><strong>{value.date ? formatDate(value.date) : value.raw_value || "Not supplied"}</strong><small>{value.status.replaceAll("_", " ")}</small></div>;
 }
 
-function DocumentInspector({ document, components, loading, onClose }: { document: CatalogDocument; components: CryptoComponent[]; loading: boolean; onClose: () => void }) {
-  return <div className="document-inspector"><header><div><span>Selected source record</span><strong>{document.source_paths?.[0] || `Document ${document.document_id}`}</strong></div><button type="button" className="icon-button" onClick={onClose} aria-label="Close document inspector"><X /></button></header><div className="document-provenance"><span>SHA-256 <code>{document.sha256}</code></span><span>Observed <strong>{document.generated_at_text ? new Date(document.generated_at_text).toLocaleString() : "Not supplied"}</strong></span></div>{loading ? <p className="drawer-loading">Loading candidate crypto components…</p> : <div className="component-list">{components.map((component) => <article key={component.occurrence_id}><div><strong>{component.name}</strong><span>{component.version || "Version not supplied"} · {component.component_type}</span></div><code title={component.canonical_purl || component.bom_ref || ""}>{component.canonical_purl || component.bom_ref || "No PURL or BOM reference"}</code></article>)}{!components.length ? <div className="drawer-empty"><LibraryBig />No explicit crypto components were returned for this document.</div> : null}</div>}</div>;
+function DocumentInspector({ document, components, loading, error, onClose }: { document: CatalogDocument; components: CryptoComponent[]; loading: boolean; error: string; onClose: () => void }) {
+  return <div className="document-inspector"><header><div><span>Selected source record</span><strong>{document.source_paths?.[0] || `Document ${document.document_id}`}</strong></div><button type="button" className="icon-button" onClick={onClose} aria-label="Close document inspector"><X /></button></header><div className="document-provenance"><span>SHA-256 <code>{document.sha256}</code></span><span>Observed <strong>{document.generated_at_text ? new Date(document.generated_at_text).toLocaleString() : "Not supplied"}</strong></span></div>{loading ? <p className="drawer-loading">Loading candidate crypto components…</p> : error ? <div className="detail-error" role="alert">Unable to load candidate crypto components: {error}</div> : <div className="component-list">{components.map((component) => <article key={component.occurrence_id}><div><strong>{component.name}</strong><span>{component.version || "Version not supplied"} · {component.component_type}</span></div><code title={component.canonical_purl || component.bom_ref || ""}>{component.canonical_purl || component.bom_ref || "No PURL or BOM reference"}</code></article>)}{!components.length ? <div className="drawer-empty"><LibraryBig />No explicit crypto components were returned for this document.</div> : null}</div>}</div>;
 }

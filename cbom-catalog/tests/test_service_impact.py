@@ -3,7 +3,10 @@ from __future__ import annotations
 import unittest
 
 try:
-    from cbom_catalog.service_impact import parse_service_impact_source
+    from cbom_catalog.service_impact import (
+        _apply_authoritative_service_group_risks,
+        parse_service_impact_source,
+    )
 except ModuleNotFoundError as exc:
     if exc.name != "psycopg":
         raise
@@ -12,6 +15,36 @@ except ModuleNotFoundError as exc:
 
 @unittest.skipIf(parse_service_impact_source is None, "install project dependencies to run import tests")
 class ServiceImpactImportTests(unittest.TestCase):
+    def test_authoritative_risk_directive_overrides_only_named_group_risks(self) -> None:
+        impacts = {
+            "sse-cboms/identity-core": {
+                "risk_category": "High",
+                "comments": "Preserve this comment",
+                "source": {"source_sha256": "original"},
+            },
+            "sse-cboms/other": {"risk_category": "Low"},
+        }
+
+        result = _apply_authoritative_service_group_risks(impacts)
+
+        self.assertEqual(result["sse-cboms/identity-core"]["risk_category"], "Moderate")
+        self.assertEqual(result["sse-cboms/identity-core"]["comments"], "Preserve this comment")
+        self.assertEqual(result["sse-cboms/identity-core"]["source"], {"source_sha256": "original"})
+        self.assertEqual(result["sse-cboms/dlp"]["risk_category"], "Critical")
+        self.assertEqual(result["sse-cboms/swg-proxy"]["risk_category"], "Critical")
+        self.assertEqual(
+            result["sse-cboms/swg-roaming-client-no-cbom"]["risk_category"],
+            "Critical",
+        )
+        self.assertEqual(result["sse-cboms/zta-bap"]["risk_category"], "Critical")
+        self.assertEqual(result["sse-cboms/discovery"]["risk_category"], "Moderate")
+        self.assertEqual(result["sse-cboms/download-service"]["risk_category"], "Moderate")
+        self.assertEqual(result["sse-cboms/other"]["risk_category"], "Low")
+        self.assertEqual(
+            result["sse-cboms/dlp"]["risk_authority"]["evidence_grade"],
+            "user_asserted",
+        )
+
     def test_parser_keeps_only_requested_planning_fields(self) -> None:
         source = (
             "Owner\tTeam\tLead\tCBOM available?\tCBOM Valid?\tETA IL2\tETA IL5\t"

@@ -17,7 +17,15 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from .repository import connect
-from .team_milestones import _MERGED_TEAM_KEYS, _TEAM_ROWS, GROUP_TEAM_KEYS, _slug
+from .team_milestones import (
+    GROUP_TEAM_KEYS,
+    TRACKER_SOURCE,
+    _MERGED_SOURCE_KEYS,
+    _MERGED_TEAM_KEYS,
+    _TEAM_ROWS,
+    _slug,
+    _tracker_row,
+)
 
 _TEAM_KEY_ALIASES = {
     "dw-volt-dashweb": "DW-VOLT",
@@ -346,37 +354,56 @@ def import_target_module_evidence(path: Path, database_url: str | None = None) -
     records = payload["records"]
     with connect(database_url) as connection:
         existing = connection.execute(
-            "SELECT id FROM target_module_evidence_import WHERE source_sha256 = %s",
+            "SELECT id, is_active FROM target_module_evidence_import WHERE source_sha256 = %s",
             (source_sha256,),
         ).fetchone()
         if existing:
-            return {"status": "unchanged", "import_id": existing["id"], "source_sha256": source_sha256, "evidence_record_count": len(records)}
-        connection.execute("UPDATE target_module_evidence_import SET is_active = false WHERE is_active AND evidence_set_kind = 'public_authority'")
-        imported = connection.execute(
-            """INSERT INTO target_module_evidence_import
-               (source_filename, source_sha256, evidence_set_kind, retrieved_on, is_active, evidence_record_count, raw_payload)
-               VALUES (%s, %s, 'public_authority', %s, true, %s, %s) RETURNING id""",
-            (path.name, source_sha256, retrieved, len(records), Jsonb(payload)),
-        ).fetchone()
-        import_id = int(imported["id"])
-        inserted: list[dict[str, Any]] = []
-        for raw in records:
-            if not isinstance(raw, dict) or not raw.get("key") or not raw.get("url"):
-                raise ValueError("Every evidence record needs key and url")
-            record_hash = hashlib.sha256(json.dumps(raw, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
-            saved = connection.execute(
-                """INSERT INTO target_module_external_evidence
-                   (import_id, evidence_key, authority, source_kind, source_title, source_url,
-                    published_on, retrieved_on, certificate_number, module_name, module_version,
-                    public_status, evidence_grade, supports_fields, limitations, payload_sha256, raw_record)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                   RETURNING id""",
-                (import_id, raw["key"], raw["authority"], raw["source_kind"], raw["title"], raw["url"],
-                 raw.get("published_on"), retrieved, raw.get("certificate_number"), raw.get("module_name"),
-                 raw.get("module_version"), raw.get("public_status"), raw["evidence_grade"],
-                 raw.get("supports_fields", []), raw.get("limitations", []), record_hash, Jsonb(raw)),
+            import_id = int(existing["id"])
+            if not existing["is_active"]:
+                connection.execute("UPDATE target_module_evidence_import SET is_active = false WHERE is_active AND evidence_set_kind = 'public_authority'")
+                connection.execute("UPDATE target_module_evidence_import SET is_active = true WHERE id = %s", (import_id,))
+            saved_rows = connection.execute(
+                """SELECT id, evidence_key, payload_sha256, raw_record
+                   FROM target_module_external_evidence WHERE import_id = %s
+                   ORDER BY evidence_key""",
+                (import_id,),
+            ).fetchall()
+            inserted = [
+                {
+                    **dict(saved["raw_record"]),
+                    "id": saved["id"],
+                    "payload_sha256": saved["payload_sha256"],
+                    "evidence_key": saved["evidence_key"],
+                }
+                for saved in saved_rows
+            ]
+        else:
+            connection.execute("UPDATE target_module_evidence_import SET is_active = false WHERE is_active AND evidence_set_kind = 'public_authority'")
+            imported = connection.execute(
+                """INSERT INTO target_module_evidence_import
+                   (source_filename, source_sha256, evidence_set_kind, retrieved_on, is_active, evidence_record_count, raw_payload)
+                   VALUES (%s, %s, 'public_authority', %s, true, %s, %s) RETURNING id""",
+                (path.name, source_sha256, retrieved, len(records), Jsonb(payload)),
             ).fetchone()
-            inserted.append({**raw, "id": saved["id"], "payload_sha256": record_hash, "evidence_key": raw["key"]})
+            import_id = int(imported["id"])
+            inserted: list[dict[str, Any]] = []
+            for raw in records:
+                if not isinstance(raw, dict) or not raw.get("key") or not raw.get("url"):
+                    raise ValueError("Every evidence record needs key and url")
+                record_hash = hashlib.sha256(json.dumps(raw, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+                saved = connection.execute(
+                    """INSERT INTO target_module_external_evidence
+                       (import_id, evidence_key, authority, source_kind, source_title, source_url,
+                        published_on, retrieved_on, certificate_number, module_name, module_version,
+                        public_status, evidence_grade, supports_fields, limitations, payload_sha256, raw_record)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                       RETURNING id""",
+                    (import_id, raw["key"], raw["authority"], raw["source_kind"], raw["title"], raw["url"],
+                     raw.get("published_on"), retrieved, raw.get("certificate_number"), raw.get("module_name"),
+                     raw.get("module_version"), raw.get("public_status"), raw["evidence_grade"],
+                     raw.get("supports_fields", []), raw.get("limitations", []), record_hash, Jsonb(raw)),
+                ).fetchone()
+                inserted.append({**raw, "id": saved["id"], "payload_sha256": record_hash, "evidence_key": raw["key"]})
         target_import = connection.execute("SELECT id FROM target_module_import WHERE is_active").fetchone()
         if not target_import:
             raise RuntimeError("Import target-module planning data before claim evidence")
@@ -393,7 +420,7 @@ def import_target_module_evidence(path: Path, database_url: str | None = None) -
             }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
             connection.execute("UPDATE team_target_module SET assertion_subject_sha256 = %s WHERE id = %s AND assertion_subject_sha256 IS NULL", (assertion_hash, row["id"]))
             for item, field, verdict, strength, note in _public_links(row, inserted):
-                connection.execute(
+                saved_link = connection.execute(
                     """INSERT INTO target_module_claim_evidence
                        (target_module_id, evidence_import_id, external_evidence_id, claim_field, claim_value, observed_value,
                         verdict, evidence_grade, source_kind, correlation_strength, provider, source_url,
@@ -408,8 +435,9 @@ def import_target_module_evidence(path: Path, database_url: str | None = None) -
                      item["url"], item["title"], item["evidence_key"], item["payload_sha256"], now,
                      item.get("published_on"), Jsonb(item), note),
                 )
-                linked += 1
-    return {"status": "imported", "import_id": import_id, "source_sha256": source_sha256, "evidence_record_count": len(records), "claim_links_considered": linked}
+                linked += saved_link.rowcount
+    status = "imported" if not existing else "relinked" if linked else "unchanged"
+    return {"status": status, "import_id": import_id, "source_sha256": source_sha256, "evidence_record_count": len(records), "claim_links_considered": linked}
 
 
 def import_catalog_claim_evidence(path: Path, database_url: str | None = None) -> dict[str, Any]:
@@ -430,17 +458,21 @@ def import_catalog_claim_evidence(path: Path, database_url: str | None = None) -
         "not_assessable": ("not_assessable", "uncorrelated", "current_module_identity"),
     }
     with connect(database_url) as connection:
-        existing = connection.execute("SELECT id FROM target_module_evidence_import WHERE source_sha256 = %s", (source_sha256,)).fetchone()
+        existing = connection.execute("SELECT id, is_active FROM target_module_evidence_import WHERE source_sha256 = %s", (source_sha256,)).fetchone()
         if existing:
-            return {"status": "unchanged", "import_id": existing["id"], "source_sha256": source_sha256, "evidence_record_count": len(records)}
-        connection.execute("UPDATE target_module_evidence_import SET is_active = false WHERE is_active AND evidence_set_kind = 'catalog_correlation'")
-        imported = connection.execute(
-            """INSERT INTO target_module_evidence_import
-               (source_filename, source_sha256, evidence_set_kind, retrieved_on, is_active, evidence_record_count, raw_payload)
-               VALUES (%s,%s,'catalog_correlation',%s,true,%s,%s) RETURNING id""",
-            (path.name, source_sha256, assessed_on, len(records), Jsonb(payload)),
-        ).fetchone()
-        import_id = int(imported["id"])
+            import_id = int(existing["id"])
+            if not existing["is_active"]:
+                connection.execute("UPDATE target_module_evidence_import SET is_active = false WHERE is_active AND evidence_set_kind = 'catalog_correlation'")
+                connection.execute("UPDATE target_module_evidence_import SET is_active = true WHERE id = %s", (import_id,))
+        else:
+            connection.execute("UPDATE target_module_evidence_import SET is_active = false WHERE is_active AND evidence_set_kind = 'catalog_correlation'")
+            imported = connection.execute(
+                """INSERT INTO target_module_evidence_import
+                   (source_filename, source_sha256, evidence_set_kind, retrieved_on, is_active, evidence_record_count, raw_payload)
+                   VALUES (%s,%s,'catalog_correlation',%s,true,%s,%s) RETURNING id""",
+                (path.name, source_sha256, assessed_on, len(records), Jsonb(payload)),
+            ).fetchone()
+            import_id = int(imported["id"])
         target_import = connection.execute("SELECT id FROM target_module_import WHERE is_active").fetchone()
         if not target_import:
             raise RuntimeError("Import target-module planning data before catalog claim evidence")
@@ -475,7 +507,7 @@ def import_catalog_claim_evidence(path: Path, database_url: str | None = None) -
                     ).fetchone()
                     component_occurrence_id = component["id"] if component else None
             record_hash = hashlib.sha256(json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
-            connection.execute(
+            saved_link = connection.execute(
                 """INSERT INTO target_module_claim_evidence
                    (target_module_id, evidence_import_id, claim_field, claim_value, observed_value, verdict, evidence_grade,
                     source_kind, correlation_strength, document_id, source_file_id, document_component_id,
@@ -490,8 +522,9 @@ def import_catalog_claim_evidence(path: Path, database_url: str | None = None) -
                  record_hash, datetime.combine(assessed_on, datetime.min.time(), tzinfo=timezone.utc),
                  Jsonb(record), "Inventory presence is not proof of runtime use, approved mode, or module validation."),
             )
-            linked += 1
-    return {"status": "imported", "import_id": import_id, "source_sha256": source_sha256, "evidence_record_count": len(records), "claim_links": linked}
+            linked += saved_link.rowcount
+    status = "imported" if not existing else "relinked" if linked else "unchanged"
+    return {"status": status, "import_id": import_id, "source_sha256": source_sha256, "evidence_record_count": len(records), "claim_links": linked}
 
 
 def load_active_target_modules(connection: Any) -> dict[str, Any] | None:
@@ -581,16 +614,44 @@ def load_active_target_modules(connection: Any) -> dict[str, Any] | None:
             }
         )
         key = row["team_key"]
+        imported_planning = {
+            "team": row["team_name"],
+            "owner": row["owner_name"],
+            "lead": row["lead_name"],
+            "il2_raw": row["il2_raw"],
+            "il5_raw": row["il5_raw"],
+        }
+        if key in _TEAM_ROWS:
+            approved_planning = _tracker_row(key)
+        else:
+            approved_planning = None
+        effective_team = approved_planning["team"] if approved_planning else row["team_name"]
+        effective_owner = approved_planning["owner"] if approved_planning else row["owner_name"]
+        effective_lead = approved_planning["lead"] if approved_planning else row["lead_name"]
+        effective_il2 = approved_planning["il2"] if approved_planning else row["il2_raw"]
+        effective_il5 = approved_planning["il5"] if approved_planning else row["il5_raw"]
         team = teams.setdefault(
             key,
             {
                 "team_key": key,
-                "team": row["team_name"],
-                "owner": row["owner_name"],
-                "lead": row["lead_name"],
-                "il2_raw": row["il2_raw"],
-                "il5_raw": row["il5_raw"],
+                "team": effective_team,
+                "owner": effective_owner or None,
+                "lead": effective_lead or None,
+                "il2_raw": effective_il2 or None,
+                "il5_raw": effective_il5 or None,
                 "service_groups": service_groups,
+                "planning_source": TRACKER_SOURCE,
+                "imported_planning": imported_planning,
+                "planning_merged_into": next(
+                    (
+                        canonical
+                        for canonical, source_keys in _MERGED_TEAM_KEYS.items()
+                        if key in source_keys and key != canonical
+                    ),
+                    None,
+                )
+                if key in _MERGED_SOURCE_KEYS
+                else None,
                 "modules": [],
             },
         )
@@ -633,7 +694,7 @@ def load_active_target_modules(connection: Any) -> dict[str, Any] | None:
                 group_slug,
                 {"service_group": group_slug, "teams": [], "modules": []},
             )
-            group["modules"].append({**module, "team_key": key, "team": row["team_name"]})
+            group["modules"].append({**module, "team_key": key, "team": team["team"]})
     for team in teams.values():
         for group_slug in team["service_groups"]:
             group = groups[group_slug]

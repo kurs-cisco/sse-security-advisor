@@ -162,6 +162,23 @@ no-op. `team_target_module` retains every raw module row and its record checksum
 one import is marked active for current views. A database snapshot therefore
 contains both the catalog and the planning-data provenance.
 
+PR #1 is the approved authority for owner, lead, IL2, and IL5 planning fields.
+The target-module JSON remains authoritative for its module inventory and
+provider-attributed status assertions, but cannot override those approved
+planning fields. This overlay is applied when the active contract is read so an
+older database import cannot reintroduce superseded dates. API responses expose
+the effective PR #1 planning fields and retain the JSON values under
+`imported_planning`; merged rows also identify their canonical planning row.
+
+After a new target-module checksum becomes active, rerun both target-evidence
+imports. A checksum-identical evidence set is reactivated if necessary and
+idempotently relinked to the current target rows; it is not duplicated:
+
+```bash
+docker compose --profile tools run --rm target-public-evidence
+docker compose --profile tools run --rm target-catalog-evidence
+```
+
 ### Service-impact planning import
 
 The service-impact spreadsheet export is a separate checksum-gated planning
@@ -173,6 +190,19 @@ and `Comments`.
 CBOM_SERVICE_IMPACT_FILE=../service_impact.csv \
   docker compose --profile tools run --rm service-impact
 ```
+
+The imported spreadsheet remains immutable evidence. A risk-only authority,
+consolidated through 2026-09-25, supersedes the imported `risk_category` for
+these service groups: Critical (`dlp`, `fis-sma-threatgrid`, `identity-apps`,
+`saasapi`, `landers`, `swg-proxy`, `swg-roaming-client-no-cbom`, `frouter`,
+`android-no-cbom`, `zta-bap`, `zta-calp`, `scc-backend`) and Moderate
+(`dw-volt`, `identity-core`, `avengers`, `opc`, `discovery`, `disthost`,
+`download-service`). The supplied `SWG` umbrella label resolves to the two
+canonical SWG groups rather than creating a duplicate synthetic group. The
+application computes a deterministic SHA-256 over that authority map, exposes
+it as `risk_authority`, and preserves the original spreadsheet row, POA&M
+impact, and comments. These values remain `user_asserted` planning metadata and
+are not assessor risk determinations.
 
 Owner, lead, CBOM availability/validity, IL2, IL5, and every other spreadsheet
 column are deliberately ignored and cannot overwrite Team Tracker or catalog
@@ -197,7 +227,8 @@ optionally, service group. It:
 6. aggregates operational workstreams without discarding asset candidates;
 7. joins every eligible candidate back to its service record, service group,
    source checksum, component/library identity, finding, owner, lead, and ETA;
-8. joins the active target-module import by canonical team/service-group mapping;
+8. joins the active target-module import by canonical team/service-group mapping
+   while applying PR #1 owner/lead/IL2/IL5 planning values;
 9. creates two portfolio review dimensions for active-certificate targets and
    CMVP In-Test/In-Progress dependencies; and
 10. enriches the view with owner, lead, IL2, IL5, module status, certificate
@@ -246,6 +277,16 @@ mode, ATO scope, impact, owner, dates, and disposition.
 - Assessment results include a policy version, run ID, evidence fingerprints,
   scope, limitations, and explicit review requirements.
 - POA&M IDs and workstream IDs are derived from stable deduplication inputs.
+- POA&M candidates, workstreams, and portfolio IDs are built once from the
+  canonical assessment universe. Service-group detail views filter those
+  canonical records; they do not recompute IDs, owners, dates, or grouping from
+  a narrower scope.
+- Target-module planning assertions remain separate from catalog findings.
+  Accountability may flag asserted non-compliance or contradictory
+  verification for review, but those flags do not increase finding or POA&M
+  candidate counts.
+- Imported service-impact risk and proposed POA&M candidate risk are distinct
+  fields and are labeled separately in the console.
 
 The normative specialist instructions are in
 [`../../.agents/skills/fedramp-fips-assessor/`](../../.agents/skills/fedramp-fips-assessor/).

@@ -16,6 +16,7 @@ export type ServiceInventory = {
   id: string;
   service: string;
   group: string;
+  groups: string[];
   kind: "CBOM" | "SBOM" | "CycloneDX" | "SPDX" | "Evidence" | "Tool summary";
   format: string;
   cryptoComponents: number;
@@ -23,6 +24,7 @@ export type ServiceInventory = {
   checksum: string;
   observedAt: string;
   provenance: string;
+  provenancePaths: string[];
   status: InventoryStatus;
 };
 

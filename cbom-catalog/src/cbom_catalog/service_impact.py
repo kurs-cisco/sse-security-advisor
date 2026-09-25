@@ -21,6 +21,50 @@ from .target_modules import _service_groups, _team_key
 
 _REQUIRED_HEADERS = ("Team", "Impact on POA&M", "Risk Category", "Comments")
 
+# User-approved POA&M planning authority consolidated through 2026-09-25.
+# This deliberately overlays only risk_category; imported impact/comments and
+# the immutable source row remain available underneath. It is planning metadata,
+# not an assessor risk determination.
+_AUTHORITATIVE_SERVICE_GROUP_RISKS = {
+    "dlp": "Critical",
+    "fis-sma-threatgrid": "Critical",
+    "identity-apps": "Critical",
+    "saasapi": "Critical",
+    "landers": "Critical",
+    "dw-volt": "Moderate",
+    "identity-core": "Moderate",
+    "avengers": "Moderate",
+    "opc": "Moderate",
+    "swg-proxy": "Critical",
+    "swg-roaming-client-no-cbom": "Critical",
+    "frouter": "Critical",
+    "android-no-cbom": "Critical",
+    "zta-bap": "Critical",
+    "zta-calp": "Critical",
+    "scc-backend": "Critical",
+    "discovery": "Moderate",
+    "disthost": "Moderate",
+    "download-service": "Moderate",
+}
+_RISK_AUTHORITY_PAYLOAD = {
+    "authority": "User-approved POA&M service-risk directive",
+    "approved_on": "2026-09-25",
+    "source_collection": "sse-cboms",
+    "evidence_grade": "user_asserted",
+    "review_required": True,
+    "scope_aliases": {
+        "SWG": ["swg-proxy", "swg-roaming-client-no-cbom"],
+    },
+    "service_group_risks": _AUTHORITATIVE_SERVICE_GROUP_RISKS,
+}
+_RISK_AUTHORITY_SHA256 = hashlib.sha256(
+    json.dumps(
+        _RISK_AUTHORITY_PAYLOAD,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+).hexdigest()
+
 
 def _clean(value: Any) -> str | None:
     if value is None:
@@ -249,4 +293,36 @@ def load_active_service_impacts(connection: Any) -> dict[str, dict[str, Any]]:
                     "imported_at": row["imported_at"],
                 },
             }
+    _apply_authoritative_service_group_risks(result)
     return result
+
+
+def _apply_authoritative_service_group_risks(
+    impacts: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Apply the approved risk-only authority without rewriting imported evidence."""
+    for position, (service_group, risk_category) in enumerate(
+        _AUTHORITATIVE_SERVICE_GROUP_RISKS.items(), start=1
+    ):
+        service_key = f"sse-cboms/{service_group}"
+        record = impacts.setdefault(
+            service_key,
+            {
+                "poam_impact": None,
+                "comments": None,
+                "team": None,
+                "evidence_grade": "user_asserted",
+                "review_required": True,
+                "source": None,
+            },
+        )
+        record["risk_category"] = risk_category
+        record["risk_authority"] = {
+            "authority": _RISK_AUTHORITY_PAYLOAD["authority"],
+            "approved_on": _RISK_AUTHORITY_PAYLOAD["approved_on"],
+            "source_sha256": _RISK_AUTHORITY_SHA256,
+            "source_row": position,
+            "evidence_grade": "user_asserted",
+            "review_required": True,
+        }
+    return impacts
