@@ -94,3 +94,87 @@ images and task definitions use `linux/amd64`.
 
 Never place the OIDC client secret, application API credentials, database dump,
 or generated database credentials in this directory or in CDK context files.
+
+## Staged OIDC group access policy
+
+The deployed product-detail stage uses policy version `2026-09-27.2` with 83
+exact groups: `fedsse-admins`, `fedsse-external`, `fedsse-scr2-leads`, and 80
+generated service lead and engineer groups. The latter two global groups grant
+numeric portfolio summaries only. The stack rejects placeholder service/ATO
+grants. The 40 explicit catalog pairs in `lib/oidc-service-groups.ts` generate
+the 80 exact service names, each with two grants. The grants use the stable
+policy IDs
+`secure-access-government` and `secure-access-defense`, with display boundary
+labels `FedRAMP High/IL2` and `IL5`. The same MyID service group grants both
+product contexts. These are deployment policy identifiers and display labels;
+they are not proof of authorization. All 534 current `sse-cboms` files have
+owner-approved, exact-SHA operational routing decisions for both products;
+see the [change record](../cbom-catalog/docs/CHANGE_RECORD_2026-09-26_DUAL_PRODUCT_ROUTING.md).
+This stage sets `enableOidcServiceGroups=true`,
+`enableAdminGroupMapping=true`, and
+`enableProductScopedDetailEvidence=true`. A verified service Lead or Engineer
+can read catalog evidence only through an exact
+`(source_collection, service_group, product_scope_id)` grant; current-source
+checksum attribution is required by the query itself. The feature does not
+enable FIPS detail, candidate output or exports, approved writes, roster
+actions, or operational evidence notes. FIPS routes independently require a
+complete matching product contract and immutable authorization reference, so
+they remain closed for the current configuration. Other products gain no access
+through this map.
+
+Image `deploy-20260927-13` completed the follow-up UI and profile-capability
+release on ECS task revision 31. It does not alter the feature flags or the
+exact OIDC policy; it prevents the console from requesting FIPS or review
+workflow routes when a product grant lacks the immutable authorization
+reference those routes require.
+
+`enableAdminGroupMapping=true` enables the Administrator mapping registry in
+migration 021. It starts from the synthesized 83-group deployment baseline and
+then uses the first published Administrator revision as the application policy.
+Every mapping revision is append-only. Publishing requires a signed human
+`fedsse-admins` Administrator, a registered catalog target, one or both
+configured product scope IDs, a reason, and the current revision token. The
+transaction uses compare-and-swap semantics and records actor, request ID,
+before/after mapping, and content hashes in `app_auth.audit_event`. The global
+Admin and summary groups remain protected, API credentials cannot access this
+endpoint, and a missing active revision after a prior publish denies cloud
+group access. This editor changes application mapping only; it never modifies
+MyID membership, source files, routing decisions, planning records, assessment
+records, or ATO/CMVP facts.
+
+The deployed UI image `deploy-20260927-5` adds a grant-only Reviews placeholder
+for assigned product roles and corrects the aggregate POA&M heading. Fresh Duo
+role-flow and mobile browser checks completed on revision 25. The interim
+`deploy-20260927-6` UI build was not deployed. The compliance-wording image
+`deploy-20260927-7` is deployed on revision 26: its signed Playwright checks
+confirmed the read-only current-session roster panel and historical rows,
+corrected ingestion and aggregate wording, Lead observation/proposal wording,
+Lead register 200, Admin/FIPS detail 403, and normal navigation with no
+JavaScript errors. Image `deploy-20260927-10` supersedes image 9 and carries
+the Administrator mapping registry and migration-021 support, including
+Administrator-only current-source-file and fingerprinted-source-file **catalog
+inventory** counts for each mapping target. A zero fingerprinted count renders
+an **Evidence gap** state and says that coverage is unknown; it is not
+compliance, validation, authorization, product evidence, or FIPS evidence.
+Image 10 reached `UPDATE_COMPLETE`, completed the ECS web task revision 29
+rollout at 1/1, and returned HTTP 200 from `/healthz`. A signed Admin browser
+flow loaded 40 mapping rows with 534 current files and five zero-SHA/zero-file
+rows; it showed the inventory-only disclaimer and five **Evidence gap** pills,
+without the retired “CBOM source evidence” label. It does not enable detailed
+evidence, roster actions, operational notes, strict proposals, FIPS detail, or
+candidate exports.
+
+Before enabling detail or writes, review a new policy version and synthesized
+API policy, then complete the remaining gates in
+`../cbom-catalog/docs/GROUP_ACCESS_ROLLOUT.md`.
+
+Do not use `deploy-latest.sh` for an access-only release: it also applies
+migrations and runs evidence ingestion. Review an explicit CDK change set.
+Operational migrations 016–021 and the existing-file routing backfill have
+been applied and verified live. These migrations do not alter source
+evidence or planning data. The earlier diagnostic-stage application release used the direct
+CloudFormation path with all service-access switches disabled. Its temporary
+diagnostic code has since been removed from source; see the
+[change record](../cbom-catalog/docs/CHANGE_RECORD_2026-09-26_OIDC_DIAGNOSTIC_DEPLOYMENT.md).
+Never treat those changes as approval for source ingestion,
+planning/assessment changes, or detailed service evidence and write activation.

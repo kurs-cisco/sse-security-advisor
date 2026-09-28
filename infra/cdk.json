@@ -33,8 +33,23 @@
       "us-gov-east-1b",
       "us-gov-east-1c"
     ],
-    "imageTag": "deploy-20260924-1",
+    "imageTag": "deploy-20260928-19",
     "oidcClientId": "DIIYIKV2YSWCYEYECY3L",
+    "oidcGroupScope": {
+      "version": "2026-09-27.2",
+      "groups": {
+        "fedsse-admins": { "access": "admin" },
+        "fedsse-external": { "access": "summary" },
+        "fedsse-scr2-leads": { "access": "summary" }
+      }
+    },
+    "enableOidcServiceGroups": true,
+    "enableAdminGroupMapping": true,
+    "enableProductScopedDetailEvidence": true,
+    "enableAccessRoster": false,
+    "enableLeadReviewProposals": false,
+    "enableOperationalEvidenceNotes": false,
+    "enableServiceCatalog": true,
     "oidcIssuer": "https://sso-345c0691.sso.duosecurity.com/oidc/DIIYIKV2YSWCYEYECY3L",
     "oidcAuthorizationEndpoint": "https://sso-345c0691.sso.duosecurity.com/oidc/DIIYIKV2YSWCYEYECY3L/authorize",
     "oidcTokenEndpoint": "https://sso-345c0691.sso.duosecurity.com/oidc/DIIYIKV2YSWCYEYECY3L/token",

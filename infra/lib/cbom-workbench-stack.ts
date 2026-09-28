@@ -14,6 +14,7 @@ import * as route53Targets from "aws-cdk-lib/aws-route53-targets";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import { Construct } from "constructs";
+import { OIDC_PRODUCT_SCOPES, OIDC_SERVICE_GROUPS } from "./oidc-service-groups";
 
 function asBoolean(value: unknown): boolean {
   return value === true || value === "true";
@@ -25,6 +26,105 @@ function requiredContext(scope: Construct, key: string): string {
     throw new Error(`Missing required CDK context: ${key}`);
   }
   return String(value);
+}
+
+function oidcGroupScopeJson(scope: Construct): string {
+  const policy = scope.node.tryGetContext("oidcGroupScope");
+  if (!policy || typeof policy !== "object" || Array.isArray(policy)) {
+    throw new Error("Missing oidcGroupScope deployment policy");
+  }
+  const version = (policy as { version?: unknown }).version;
+  if (typeof version !== "string" || !version.trim()) {
+    throw new Error("oidcGroupScope must have a version");
+  }
+  const groups = (policy as { groups?: unknown }).groups;
+  if (!groups || typeof groups !== "object" || Array.isArray(groups)) {
+    throw new Error("oidcGroupScope must contain exact group mappings");
+  }
+  const entries: Record<string, { access?: unknown; grants?: unknown; service_key?: unknown }> = {
+    ...groups as Record<string, { access?: unknown; grants?: unknown; service_key?: unknown }>,
+  };
+  const productScopesById = new Map<string, (typeof OIDC_PRODUCT_SCOPES)[number]>();
+  for (const productScope of OIDC_PRODUCT_SCOPES) {
+    if (productScopesById.has(productScope.product_scope_id)) {
+      throw new Error(`Duplicate product scope policy identity: ${productScope.product_scope_id}`);
+    }
+    productScopesById.set(productScope.product_scope_id, productScope);
+  }
+  if (asBoolean(scope.node.tryGetContext("enableOidcServiceGroups"))) {
+    const globalGroups = new Set(["fedsse-admins", "fedsse-external", "fedsse-scr2-leads"]);
+    if (Object.keys(entries).some((name) => !globalGroups.has(name))) {
+      throw new Error("Enabled service grants must come only from the exact OIDC service registry");
+    }
+    const seenServices = new Set<string>();
+    for (const service of OIDC_SERVICE_GROUPS) {
+      const pair = `${service.source_collection}\u0000${service.service_group}`;
+      if (seenServices.has(pair)) throw new Error(`Duplicate OIDC service identity: ${pair}`);
+      seenServices.add(pair);
+      for (const [suffix, access] of [["leads", "lead"], ["engineers", "engineer"]] as const) {
+        const name = `fedsse-${service.service_key}-${suffix}`;
+        if (entries[name] !== undefined) throw new Error(`Duplicate OIDC access group: ${name}`);
+        entries[name] = {
+          access,
+          service_key: service.service_key,
+          grants: OIDC_PRODUCT_SCOPES.map((productScope) => ({
+            source_collection: service.source_collection,
+            service_group: service.service_group,
+            product_scope_id: productScope.product_scope_id,
+            boundary_name: productScope.boundary_name,
+          })),
+        };
+      }
+    }
+  }
+  if (entries["fedsse-admins"]?.access !== "admin"
+    || entries["fedsse-external"]?.access !== "summary"
+    || entries["fedsse-scr2-leads"]?.access !== "summary") {
+    throw new Error("oidcGroupScope must define the approved administrator and summary groups");
+  }
+  for (const [name, entry] of Object.entries(entries)) {
+    if (!/^fedsse-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)
+      || !entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`Invalid OIDC access group: ${name}`);
+    }
+    if (name === "fedsse-admins" || name === "fedsse-external" || name === "fedsse-scr2-leads") {
+      if (entry.grants !== undefined) throw new Error(`Global group cannot carry service grants: ${name}`);
+      continue;
+    }
+    if ((entry.access !== "lead" && entry.access !== "engineer")
+      || !name.endsWith(entry.access === "lead" ? "-leads" : "-engineers")
+      || !Array.isArray(entry.grants) || entry.grants.length === 0) {
+      throw new Error(`Service group requires explicit lead/engineer grants: ${name}`);
+    }
+    const serviceKey = (entry as { service_key?: unknown }).service_key;
+    const suffix = entry.access === "lead" ? "leads" : "engineers";
+    if (typeof serviceKey !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(serviceKey)
+      || name !== `fedsse-${serviceKey}-${suffix}`) {
+      throw new Error(`Service group key must exactly match the OIDC group stem: ${name}`);
+    }
+    const triples = new Set<string>();
+    for (const grant of entry.grants) {
+      if (!grant || typeof grant !== "object" || Array.isArray(grant)) {
+        throw new Error(`Invalid service grant for ${name}`);
+      }
+      const fields = grant as Record<string, unknown>;
+      for (const field of ["source_collection", "service_group", "product_scope_id", "boundary_name"]) {
+        const value = fields[field];
+        if (typeof value !== "string" || !value.trim() || value !== value.trim()
+          || /[<>]/.test(value) || value.toLowerCase() === "tbd") {
+          throw new Error(`Invalid ${field} in service grant for ${name}`);
+        }
+      }
+      const triple = `${fields.source_collection}\u0000${fields.service_group}\u0000${fields.product_scope_id}`;
+      if (triples.has(triple)) throw new Error(`Duplicate collection/service/product grant for ${name}`);
+      triples.add(triple);
+      const productScope = productScopesById.get(String(fields.product_scope_id));
+      if (!productScope || fields.boundary_name !== productScope.boundary_name) {
+        throw new Error(`Service grant must use an exact approved product scope and boundary name for ${name}`);
+      }
+    }
+  }
+  return JSON.stringify({ ...policy, product_scopes: OIDC_PRODUCT_SCOPES, groups: entries });
 }
 
 export class CbomWorkbenchStack extends cdk.Stack {
@@ -44,6 +144,29 @@ export class CbomWorkbenchStack extends cdk.Stack {
     const privateSubnetRouteTableIds = this.node.tryGetContext("privateSubnetRouteTableIds") as string[];
     const activateServices = asBoolean(this.node.tryGetContext("activateServices"));
     const enableOidc = asBoolean(this.node.tryGetContext("enableOidc"));
+    const enableOidcServiceGroups = asBoolean(this.node.tryGetContext("enableOidcServiceGroups"));
+    const enableAdminGroupMapping = asBoolean(this.node.tryGetContext("enableAdminGroupMapping"));
+    const enableProductScopedDetailEvidence = asBoolean(this.node.tryGetContext("enableProductScopedDetailEvidence"));
+    const enableAccessRoster = asBoolean(this.node.tryGetContext("enableAccessRoster"));
+    const enableLeadReviewProposals = asBoolean(this.node.tryGetContext("enableLeadReviewProposals"));
+    const enableOperationalEvidenceNotes = asBoolean(this.node.tryGetContext("enableOperationalEvidenceNotes"));
+    const enableServiceCatalog = asBoolean(this.node.tryGetContext("enableServiceCatalog"));
+    if (enableProductScopedDetailEvidence && !enableOidcServiceGroups) {
+      throw new Error("Product detail requires exact OIDC service-group grants");
+    }
+    if (enableAdminGroupMapping && !enableOidcServiceGroups) {
+      throw new Error("Administrator group mapping requires exact OIDC service-group grants");
+    }
+    if (enableOperationalEvidenceNotes && !enableProductScopedDetailEvidence) {
+      throw new Error("Operational evidence notes require product-scoped detail");
+    }
+    if (enableLeadReviewProposals && !enableProductScopedDetailEvidence) {
+      throw new Error("Lead review proposals require product-scoped detail");
+    }
+    if (enableServiceCatalog && !enableOidcServiceGroups) {
+      throw new Error("Service Catalog requires exact OIDC service-group grants");
+    }
+    const groupScopeJson = oidcGroupScopeJson(this);
     const reuseRetainedBootstrapResources = asBoolean(
       this.node.tryGetContext("reuseRetainedBootstrapResources"),
     );
@@ -308,6 +431,13 @@ export class CbomWorkbenchStack extends cdk.Stack {
         CBOM_API_PREWARM: "true",
         CBOM_ASSESSMENT_TIMEZONE: "Asia/Kolkata",
         CBOM_OIDC_ISSUER: requiredContext(this, "oidcIssuer"),
+        CBOM_OIDC_GROUP_SCOPE_JSON: groupScopeJson,
+        CBOM_ADMIN_GROUP_MAPPING_ENABLED: enableAdminGroupMapping ? "true" : "false",
+        CBOM_PRODUCT_SCOPED_DETAIL_EVIDENCE_ENABLED: enableProductScopedDetailEvidence ? "true" : "false",
+        CBOM_ACCESS_ROSTER_ENABLED: enableAccessRoster ? "true" : "false",
+        CBOM_LEAD_REVIEW_PROPOSALS_ENABLED: enableLeadReviewProposals ? "true" : "false",
+        CBOM_OPERATIONAL_EVIDENCE_NOTES_ENABLED: enableOperationalEvidenceNotes ? "true" : "false",
+        CBOM_SERVICE_CATALOG_ENABLED: enableServiceCatalog ? "true" : "false",
       },
       secrets: {
         PGUSER: ecs.Secret.fromSecretsManager(databaseSecret, "username"),
