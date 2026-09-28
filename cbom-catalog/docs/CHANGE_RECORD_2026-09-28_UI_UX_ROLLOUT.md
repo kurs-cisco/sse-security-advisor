@@ -24,6 +24,15 @@ uncommitted changes at build time; Git HEAD `f43b43f` alone does not reproduce
 the images. A reviewed source snapshot should be committed before the next
 release.
 
+## Later source snapshot
+
+After the rollout, the reviewed source state was committed as `1c25401` on
+`release/deploy-20260928-19-source` and tagged
+`source-snapshot/deploy-20260928-19`. It preserves the reviewed files for
+handoff, while the immutable ECR digests above remain the authoritative
+identity of the deployed images: the snapshot was created after the build and
+does not establish byte-for-byte image reproducibility.
+
 ## Change review
 
 - Before rollout, CloudFormation was `UPDATE_COMPLETE`, ECS web revision 49 was

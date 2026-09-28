@@ -124,40 +124,13 @@ The full procedure is in [DATABASE_SNAPSHOTS.md](DATABASE_SNAPSHOTS.md).
 
 The `cbom-workbench-dev` CloudFormation stack is deployed in account
 `135124134289`, region `us-gov-east-1`, with termination protection enabled.
-The ECS service is active at desired/running count 1 on immutable
-`deploy-20260927-1` images. Both targets are healthy, `/healthz` returns 200,
-and unauthenticated application requests redirect to the configured OIDC
-provider.
-
-Migrations through 020 are applied. The Admin workspace and scoped API can create
-checksum-manifested batches, upload directly to the private temporary S3 prefix,
-launch the one-off ECS task asynchronously, and inspect job status, bounded
-CloudWatch logs, and results. The deployed S3 CORS policy allows only the
-application origin and required `PUT` checksum/content-type headers. The
-post-deployment reconciliation imported the authoritative PR #1 target payload
-and its refreshed 76-row correlation set; the public evidence and service-impact
-checksums remained unchanged.
-
-The encrypted snapshot was restored after SHA-256 verification. The canonical
-manifest/API metrics are 40 service groups, 534 present source files, 533
-unique present documents, 341 artifacts, 59,263 unique components, 282,688
-component occurrences, and 609 fingerprint records. Raw `COPY` counts printed
-by `pg_restore` are table-row counts and must not be compared directly with
-these deduplicated API metrics.
-
-The 2026-09-24 cloud reconciliation found zero group-set or document-count
-mismatches across Overview, Inventory/Accountability, POA&M, and milestone
-profiles. It reports 195 deduplicated asset candidates, 218 candidate findings,
-376 review-only findings, 13 proposed workstreams, and 11 coverage requests.
-The fifth empty category is the intentionally retained `on-prem-clients`
-planning group; absence of catalog evidence is shown as not assessable, never as
-proof of a FIPS failure or favorable posture.
-
-The September 22 service-impact planning import is checksum-gated at
-`5c481b5941d081b537c8f88805b78820fddfbe8d42af6bc9138d2dedce055ecc`.
-It contributes only POA&M impact, risk category, and comments for 20 team rows
-mapped to 22 service groups. The source remains a private transfer object and is
-not committed to Git; owner, lead, CBOM flags, IL2, and IL5 are not imported.
+Runtime image digests, applied migration state, reconciliation results, and
+browser verification are release evidence rather than durable configuration.
+The latest reviewed values are recorded in
+[CHANGE_RECORD_2026-09-28_UI_UX_ROLLOUT.md](CHANGE_RECORD_2026-09-28_UI_UX_ROLLOUT.md).
+Query the running stack and catalog before a later rollout; do not use a
+previous release's image tag, counts, candidate totals, or migration level as
+current state.
 
 The application hostname is `https://cbom.swg.dev-umbrellagov.com/`; the scoped
 automation endpoint is `https://api.cbom.swg.dev-umbrellagov.com/`. The IdP

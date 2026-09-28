@@ -12,7 +12,7 @@ The older `Resource Discovery` tracker row remains intentionally merged into
 
 The comparison identified one catalog coverage miss: `On Prem / Clients` had a
 planning row but no source folder and was not retained as an empty category. It
-is now registered as `on-prem-clients` with zero documents so its missing
+was registered as `on-prem-clients` with zero documents so its missing
 evidence is called out rather than omitted. The obsolete `apix` planning alias
 is collapsed into canonical `apix-no-cbom` and does not create a duplicate row.
 
@@ -53,9 +53,9 @@ status.
 
 ## Material corrections versus the prior imported module snapshot
 
-PR #1 is authoritative for planning fields even when the module-inventory JSON
-contains an older value. The current API contract therefore applies these
-approved corrections:
+PR #1 was the approved authority for planning fields even when the
+module-inventory JSON contained an older value. The then-current API contract
+applied these approved corrections:
 
 - Android IL2 and IL5 are `NA (Play Store)`, not October dates.
 - Avengers / FRUP IL2 and IL5 are `2026-10-12`.
@@ -96,3 +96,25 @@ module as separate CBOM-inventory, public-status, and deployment-applicability
 states. No public certificate or inventory match upgrades deployment
 applicability; that state remains not assessable without runtime and boundary
 evidence.
+
+## Historical cloud reconciliation baseline — 2026-09-24
+
+This section preserves a dated reconciliation snapshot. It is not a statement
+of the current catalog, assessment, or deployment state.
+
+The reconciliation used the refreshed 76-row target-module correlation set.
+Its separate 2026-09-22 service-impact planning input had SHA-256
+`5c481b5941d081b537c8f88805b78820fddfbe8d42af6bc9138d2dedce055ecc`.
+That source remains a private transfer object and is not committed to Git; the
+import retained only POA&M impact, risk category, and comments. The public
+evidence and service-impact checksums were unchanged by this reconciliation.
+
+Overview, Inventory/Accountability, POA&M, and milestone profiles had no
+group-set or document-count mismatch. The historical output contained 195
+deduplicated asset candidates, 218 candidate findings, 376 review-only
+findings, 13 proposed workstreams, and 11 coverage requests. These are
+machine-generated candidates or review observations, not FIPS validation,
+FedRAMP compliance, POA&M closure, or an authorization decision. The retained
+empty `on-prem-clients` planning category was not assessable because it had no
+catalog evidence; that absence did not establish either a failure or favorable
+posture.

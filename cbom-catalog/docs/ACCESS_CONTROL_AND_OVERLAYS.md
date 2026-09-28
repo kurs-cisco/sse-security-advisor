@@ -10,17 +10,26 @@ performs OIDC authentication. Automation uses bearer credentials only at
 Application identities live in the private `app_auth` schema and are separate
 from the imported evidence catalog. A verified OIDC issuer and subject become
 the stable identity; email is used only to match an invitation on first login.
+The stored application role is `viewer` or `admin`; it is not by itself a
+cloud-data entitlement.
 
-- `viewer` can browse the catalog and candidate assessments.
-- `admin` can manage users, issue or revoke scoped API credentials, and create
-  versioned administrative overlays.
-- `invited` becomes `active` when the matching verified OIDC identity first
-  signs in. Disabled identities fail closed.
+Cloud browser access is derived from the exact verified `fedsse-` group policy
+and the selected verified mode:
 
-Migration 012 bootstraps `kurs@cisco.com` as an invited administrator. The
-invitation does not contain a password and cannot be claimed without the IdP's
-signed email claim. An administrator cannot demote or disable their own active
-account through the API.
+- `admin` has portfolio and Administrator access.
+- `summary` has aggregate Overview and POA&M access only.
+- `product_lead` and `product_engineer` have only their exact
+  `(source_collection, service_group, product_scope_id)` grants; Engineer is
+  read only.
+
+Candidate assessments and exports require their separate assessment-contract
+gate even for an exact product grant. `invited` becomes `active` when the
+matching verified OIDC identity first signs in. Disabled identities fail closed.
+
+Migration 012 bootstraps the initial invited administrator. The invitation does
+not contain a password and cannot be claimed without the IdP's signed email
+claim. An administrator cannot demote or disable their own active account
+through the API.
 
 ## API credentials
 

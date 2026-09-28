@@ -31,7 +31,8 @@ npm run build
 
 Confirm API health and representative routes: dashboard, service-group register,
 service detail, document components, library inventory/usage, team milestones,
-assessment paging, issues, and all four candidate exports.
+assessment paging, issues, and assessment-export behavior for the active
+contract state.
 
 For an assigned-service review, use two different configured principals with
 disjoint grants and pass one exact `(source_collection, service_group,
@@ -89,16 +90,13 @@ registered services with no source evidence. Confirm that every mapping target
 renders its current-source-file and fingerprinted-source-file counts; a zero
 fingerprinted count must render **Evidence gap** and coverage unknown, without
 implying compliance, validation, authorization, product evidence, FIPS
-evidence, or absence of risk. These are catalog inventory counts only. Image
-`deploy-20260927-10` completed `UPDATE_COMPLETE`, ECS web revision-29 at 1/1,
-and `/healthz` 200 checks. Its signed Admin browser validation loaded 40 rows,
-534 current files, and five zero-SHA/zero-file rows; it confirmed the
-inventory-only disclaimer, no “CBOM source evidence” label, and gap pills for
-Android, iOS, On Prem/Clients, RSM Secure Client, and SWG Roaming Client. An
-initial direct API fetch without the active-mode header correctly returned 403;
-the same API returned 200 with the proper Admin mode header. Confirm the
-disposable PostgreSQL count test covers invalid, empty, historical, and
-separate-collection inputs. The disposable PostgreSQL policy-lifecycle test
+evidence, or absence of risk. These are catalog inventory counts only. Confirm
+the inventory-only disclaimer, no “CBOM source evidence” label, and Evidence
+gap treatment for configured services with no source evidence. Confirm a direct
+API fetch without an active-mode header returns 403 and the same API returns
+200 with the proper Admin mode header. Confirm the disposable PostgreSQL count
+test covers invalid, empty, historical, and separate-collection inputs. The
+disposable PostgreSQL policy-lifecycle test
 passed add, stale-revision denial, remap, retire, audit-chain, and immediate
 next-request grant checks. With disposable policy revisions
 only, verify an Admin can add, remap, and retire a paired exact Lead/Engineer
@@ -169,7 +167,7 @@ remain incomplete.
       engineer accounts cannot see Admin or mutate catalog state.
 - [ ] Product-scoped catalog detail verifies the current source SHA-256 routing
       decision for the requested exact product triple on every evidence query
-      and direct ID. All 534 current files have audited default-both routing;
+      and direct ID. Every current file has audited routing;
       disposable PostgreSQL execution tests cover scoped queries. Assessment
       and export routes remain separately gated by a verified product contract.
       The exact 40-service registry supplies grant metadata and Admin mapping.

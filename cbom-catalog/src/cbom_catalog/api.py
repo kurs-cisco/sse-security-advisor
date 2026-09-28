@@ -1229,13 +1229,6 @@ def _product_scope_ctes(product_scope_id: str | None) -> ProductScopeCtes | None
         raise HTTPException(status_code=422, detail="Unsupported product_scope_id") from error
 
 
-def _scope_cte_prefix(product_scope_id: str | None) -> tuple[str, tuple[Any, ...], ProductScopeCtes | None]:
-    scope = _product_scope_ctes(product_scope_id)
-    if scope is None:
-        return "", (), None
-    return f"WITH {scope.sql},", scope.params, scope
-
-
 def _fips_scope_cte(
     source_collection: str | None, service_group: str | list[str] | None,
     product_scope_id: str | None = None,

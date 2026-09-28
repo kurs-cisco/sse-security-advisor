@@ -5,7 +5,6 @@ from imported CBOM evidence and Team Tracker/service-impact source records.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from datetime import date
@@ -99,9 +98,3 @@ def normalized_change(payload: dict[str, Any], *, allow_empty: bool = False) -> 
         if result.get(status_key) == "not_applicable" and date_key not in result:
             result[date_key] = None
     return result
-
-
-def payload_fingerprint(payload: dict[str, Any]) -> str:
-    return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
-    ).hexdigest()
