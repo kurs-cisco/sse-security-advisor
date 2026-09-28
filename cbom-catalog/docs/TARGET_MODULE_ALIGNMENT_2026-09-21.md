@@ -23,6 +23,12 @@ Planning values are authoritative from GitHub PR #1 at commit
 `a57eaba9`; the superseded engineering milestone tracker document is not used
 as planning authority.
 
+The superseded root Confluence export
+`FIPS+140-3+Engineering+Milestone+Tracker.doc` has SHA-256
+`88079a7b6ea1659effe45637dce850e2e8eeba6a15df718c68c70ff3a439ed62` and was
+introduced in historical Git commit `faae781`. It is removed from the current
+tracked tree and is not a current planning source or shipped artifact.
+
 ## Status reconciliation
 
 The 76 source assertions normalize as follows:

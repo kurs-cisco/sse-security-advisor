@@ -2,81 +2,34 @@
 
 Status: **read-only, product-scoped catalog evidence is enabled; roster actions
 and operational notes remain disabled**. FIPS detail, candidate output, and
-exports remain closed by their separate product-contract gate. Exact group
-authorization, aggregate endpoints, local admin mode, and deployment policy
-are in the GovCloud development API and console. Policy version `2026-09-27.2`
-contains 83 exact entries: three global groups and 80 generated service lead
-and engineer groups. Migrations 016–021 remain applied and the operational
-review tables remain empty. `enableOidcServiceGroups` is true;
-`enableProductScopedDetailEvidence` and `enableAdminGroupMapping` are true;
-`enableAccessRoster` and `enableOperationalEvidenceNotes` are false.
+exports remain closed by their separate product-contract gate. The synthesized
+baseline policy version `2026-09-27.2` contains 83 exact entries: three global
+groups and 80 generated service Lead and Engineer groups. A signed Admin
+mapping revision supersedes that baseline; a missing, corrupt, or ambiguous
+active revision fails closed. `enableOidcServiceGroups`,
+`enableProductScopedDetailEvidence`, and `enableAdminGroupMapping` are enabled;
+`enableAccessRoster` and `enableOperationalEvidenceNotes` are disabled.
 
-The deployed UI image `deploy-20260927-5` added the Reviews grant-only
-placeholder for assigned product roles and corrected the aggregate page heading
-to **POA&M overview**. Fresh Duo verification completed on that image.
-`deploy-20260927-6` was an interim UI build and was not deployed.
-`deploy-20260927-7` is deployed on ECS revision 26 and its signed Playwright
-checks verified the read-only current-session roster panel and historical rows,
-corrected ingestion copy, aggregate portfolio counts/summaries wording, and
-evidence observations requiring review wording. Lead register access remained
-200; Admin and FIPS detail remained 403; normal navigation produced no
-JavaScript errors. These images do not change group policy, capability flags,
-source corpus, planning data, assessment data, or POA&M data.
+The 40 collection/service-group pairs are registered in
+`infra/lib/oidc-service-groups.ts`, including five retained zero-evidence
+scopes. Each exact service group has Government and Defense access contexts.
+Those labels route application access; they do not establish an authorization,
+CMVP validation, FIPS conclusion, or compliance result. Current-file routing is
+checksum-bound and separate from authored evidence. A new upload defaults to
+both contexts unless its authorized uploader selects otherwise.
 
-Image `deploy-20260927-10` supersedes image 9 and carries migration 021 and
-the Administrator mapping registry. The mapping view displays
-current-source-file and fingerprinted-source-file **catalog inventory** counts
-for each exact mapping target. When the fingerprinted count is zero, it renders
-an **Evidence gap** and says coverage is unknown; it never infers compliance,
-validation, authorization, product evidence, FIPS evidence, or absence of risk
-from those counts. Image 10 reached CloudFormation `UPDATE_COMPLETE`, completed
-the ECS web task revision-29 rollout at 1/1, and returned HTTP 200 from
-`/healthz`. A signed Admin Chrome/Playwright flow loaded the mapping API with
-40 rows, 534 current files, and five zero-SHA/zero-file rows. The DOM contained
-the inventory-only disclaimer, no retired “CBOM source evidence” label, and
-five **Evidence gap** pills: Android, iOS, On Prem/Clients, RSM Secure Client,
-and SWG Roaming Client. No source, planning, assessment, POA&M, or mapping data
-changed in this deployment.
+The Admin mapping view reports current and fingerprinted **catalog inventory**
+counts. A zero fingerprinted count is an **Evidence gap** with unknown coverage;
+it does not establish compliance, validation, authorization, product evidence,
+FIPS evidence, or absence of risk. Operational notes remain separate from
+assessment and POA&M results.
 
-A fresh signed Duo session confirmed exactly `fedsse-admins`,
-`fedsse-dlp-leads`, `fedsse-dlp-engineers`, and `fedsse-scr2-leads`; no SaaS
-API group was present. The signed Product Lead mode showed **Admin access
-required** and its direct mapping API call returned 403. Accountability showed
-only DLP Government and Defense grant cards with evidence detail pending.
-Admin Inventory listed all 40 services. Explicit Product Lead and Product
-Engineer modes returned only the two DLP product-grant cards, with Engineer
-cards read-only. Aggregate summary access succeeded. Missing or invalid mode
-selection, product Admin, and FIPS detail failed closed. Product detail was
-subsequently activated in image 11; see
-[CHANGE_RECORD_2026-09-27_PRODUCT_DETAIL_ACTIVATION.md](CHANGE_RECORD_2026-09-27_PRODUCT_DETAIL_ACTIVATION.md).
-The
-Admin users API returned 200 with two rows.
-
-Image 13 completed ECS revision 31 after a signed Product Lead clean-tab check
-of both DLP product contexts. The POA&M and Reviews pages showed verification
-pending without gated FIPS/review background requests or export actions. The
-exact DLP product document endpoint returned 7 records for both Lead and
-Engineer; unassigned, direct-ID, FIPS, review-proposal-without-reference, and
-Engineer-to-Admin requests failed closed. The test identity has no SaaS grant,
-and no disjoint second identity is available for a live cross-user check.
-
-Approved notes remain separate from assessment and POA&M results. The 40 exact collection/service-group pairs
-are registered in `infra/lib/oidc-service-groups.ts`, including five retained
-zero-evidence scopes. The owner declares this portfolio intended to support
-two product contexts: Secure Access for Government in Cisco Security for
-Government — FedRAMP High baseline context, and Secure Access for Defense in
-Cisco Security for Defense — DoD Impact Level 5 (IL5) context. These are
-display labels with stable policy IDs, not
-immutable package IDs or proof of authorization. The owner-directed,
-checksum-bound default-both routing for all 534 current source files is now
-recorded in `app_auth`, separately from authored evidence. New uploads default
-to both; the uploader may select one or both. Cloud access to verified grant
-metadata and read-only, exact-triple catalog detail are active. Operational
-writes remain disabled. Migrations 016–020 and the one-off
-routing backfill are verified live without source or planning changes; see the
-[routing change record](CHANGE_RECORD_2026-09-26_DUAL_PRODUCT_ROUTING.md),
-[migration 016 change record](CHANGE_RECORD_2026-09-25_MIGRATION_016.md), and
-[operational-access schema change record](CHANGE_RECORD_2026-09-26_OPERATIONAL_ACCESS_SCHEMA.md).
+For dated migration, deployment, and browser-verification evidence, use the
+[migration 016 record](CHANGE_RECORD_2026-09-25_MIGRATION_016.md),
+[routing record](CHANGE_RECORD_2026-09-26_DUAL_PRODUCT_ROUTING.md),
+[operational-access schema record](CHANGE_RECORD_2026-09-26_OPERATIONAL_ACCESS_SCHEMA.md),
+[mapping deployment record](CHANGE_RECORD_2026-09-27_ADMIN_GROUP_MAPPING.md),
+and [product-detail activation record](CHANGE_RECORD_2026-09-27_PRODUCT_DETAIL_ACTIVATION.md).
 
 ## Approved policy shape
 
@@ -112,7 +65,7 @@ DLP-lead, and SCR2-summary names were observed in direct MyID UserInfo; the
 standard `groups` claim is the product authorization input. The optional
 `memberships` scope was used only for diagnosis and is not requested by the
 deployed ALB.
-The [service-group map](OIDC_SERVICE_GROUP_MAPPING_DRAFT.md) lists the
+The [service-group map](OIDC_SERVICE_GROUP_MAPPING.md) lists the
 registered MyID stems and exact API keys. A user receives only entries present
 in their verified claim; the 83-entry policy does not grant all 40 services to
 every user.

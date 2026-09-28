@@ -93,9 +93,11 @@ curl --fail http://127.0.0.1:8000/api/v1/fips/target-modules
 docker compose logs --no-color --tail=100 api web
 ```
 
-In the browser, verify login, Overview, Inventory, Accountability, POA&M,
-service/document drawers, filters, pagination, theme switching, and all three
-POA&M downloads. In a provisioned cloud environment, also verify Admin role
+In the browser, verify login, Overview, Inventory, Service Catalog, POA&M,
+service/document drawers, filters, pagination, and theme switching. Verify
+POA&M downloads only when the active assessment contract permits exports; an
+incomplete contract must instead show the evidence-only queue and withhold
+candidate output. In a provisioned cloud environment, also verify Admin role
 visibility and the dry-run ingestion status/log/result flow. Use
 [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for the full acceptance pass.
 

@@ -8,7 +8,7 @@ import { Badge } from "@/app/components/ui/badge";
 import { Card } from "@/app/components/ui/card";
 import { StatusBanner } from "@/app/components/ui/status-banner";
 import { getPoamAssessment, getTeamMilestones, type AnalystObservation, type CoverageGap, type PoamAssessment, type PoamCandidate, type PoamWorkstream, type PortfolioPoam, type ServiceScopeLink, type TargetModuleRecord, type TeamMilestoneProfile, type TrackerMilestone } from "@/app/lib/team-milestones";
-import { ServiceGroupDrawer } from "@/components/accountability/service-accountability";
+import { ServiceGroupDrawer } from "@/components/accountability/service-group-drawer";
 import { getServiceGroupRegister } from "@/components/accountability/accountability-data";
 import { AssignedServiceUnion } from "@/components/access/assigned-service-union";
 import type { ServiceGroupRegisterRow } from "@/components/accountability/types";

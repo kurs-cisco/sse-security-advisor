@@ -12,9 +12,10 @@ data model, while the
 [ingestion and assessment contract](cbom-catalog/docs/INGESTION_AND_ASSESSMENT.md)
 preserves approved mappings and evidence rules.
 After starting the stack, the Next.js CBOM Workbench is available at
-<http://localhost:3000> with portfolio charts, service/library inventory,
-SHA-256 provenance, Team Tracker milestones, and a scoped FIPS 140-3
-transition/POA&M candidate view. The legacy workbench remains at
+<http://localhost:3000> with portfolio charts, Service Catalog and library
+inventory, SHA-256 provenance, Team Tracker milestones, and a scoped FIPS
+140-3 evidence view. Candidate output and exports require a complete verified
+assessment contract. The legacy workbench remains at
 <http://localhost:8000/ui/> as a rollback surface.
 
 In cloud mode, application administrators can start checksum-manifested corpus

@@ -6,7 +6,7 @@ import { Check, FilePenLine, Plus, RefreshCw, X } from "lucide-react";
 import { Badge } from "@/app/components/ui/badge";
 import { useConsoleAccess } from "@/app/components/console-shell";
 import { fetchJson } from "@/app/lib/http";
-import { ServiceGroupDrawer } from "@/components/accountability/service-accountability";
+import { ServiceGroupDrawer } from "@/components/accountability/service-group-drawer";
 
 type Plan = { status: string; date: string | null };
 type CatalogRow = {

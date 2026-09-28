@@ -24,9 +24,3 @@ def validate_submission(payload: dict[str, Any]) -> None:
     forbidden = {'finding_fingerprint','evidence_fingerprint','routing_fingerprint','source_sha256','source_tuple_digest'}
     if forbidden.intersection(payload) or payload.get('product_scope_id') not in {'secure-access-government','secure-access-defense'} or len(str(payload.get('note') or '').strip()) < 8 or len(str(payload.get('lead_rationale') or '').strip()) < 8:
         raise OperationalEvidenceNoteError('Invalid operational evidence observation')
-def audit(database: Any, *, request_id: str, actor_user_id: int, action: str, note_id: str, before: dict[str, Any], after: dict[str, Any], outcome: str = 'success') -> None:
-    """Append audit evidence for submit, stale/conflict denial, and decision."""
-    if action not in {'operational_evidence_note.submit','operational_evidence_note.stale','operational_evidence_note.conflict','operational_evidence_note.decision','operational_evidence_note.decision_denied'}:
-        raise OperationalEvidenceNoteError('Invalid evidence-note audit action')
-    database.execute("""INSERT INTO app_auth.audit_event (request_id,actor_user_id,action,resource_type,resource_key,before_state,after_state,outcome)
-        VALUES (%s,%s,%s,'operational_evidence_note',%s,%s,%s,%s,%s)""", (request_id,actor_user_id,action,note_id,json.dumps(before,sort_keys=True),json.dumps(after,sort_keys=True),outcome))

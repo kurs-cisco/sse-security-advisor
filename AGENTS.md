@@ -25,6 +25,9 @@ that a module is FIPS validated.
   partial download must not mark unobserved paths historical.
 - The Next.js console is the primary UI. FastAPI `/ui/` is a legacy rollback
   surface and must not be documented as the normal entry point.
+- Call the operational register **Service Catalog**; `Accountability` is a
+  legacy route name that redirects there. Candidate output and exports remain
+  closed until the assessment-contract gate is complete.
 - For release or handoff changes, run the API tests, console lint/typecheck/build,
   representative API checks, and browser flows in
   `cbom-catalog/docs/RELEASE_CHECKLIST.md`.

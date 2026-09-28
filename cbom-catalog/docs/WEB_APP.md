@@ -29,26 +29,24 @@ format, checksum, timestamps, component inventory, explicit crypto signals, and
 provenance. Library usage retains version-specific canonical identity and links
 back to affected services/documents.
 
-### Accountability
+### Service Catalog
 
-Accountability is the operational service register. Rows are grouped by
-effective executive owner and expose lead, IL2/IL5 planning, catalog evidence,
-candidate crypto assets, findings, draft POA&M candidates, and workstreams.
-Filtering covers owner/lead, milestone state, and candidate action. A side drawer
-joins Team Tracker source metadata, each service document, crypto libraries,
-coverage observations, findings, and POA&M mappings without changing evidence.
+Service Catalog is the operational service register. It shows collection/service
+rows with imported planning context, managed metadata, and an Admin-only
+evidence drawer where current source files exist. Product roles receive only
+their exact granted collection/service rows; planning fields remain operational
+assertions and do not establish authorization or FIPS validation. The legacy
+`/accountability` route redirects to `/service-catalog` and preserves a group
+deep link.
 
 ### POA&M
 
 POA&M separates non-eligible coverage/evidence requests from technical candidate
-findings. Its default view contains two portfolio candidates: migration to a
-deployment-matched active FIPS 140-3 certificate and dependency on a module in
-CMVP In-Test/In-Progress. Expand either row to follow service, group, library,
-owner/lead, group ETA, finding, and source-record links. Issue workstreams and
-asset candidates remain available as traceability layers. October, December,
-and March delivery-wave cards link to the corresponding accountability drawer.
-The page provides portfolio CSV, asset CSV, and compliance ZIP downloads. Every
-merge and disposition remains review-required. See [POAM_EXPORT.md](POAM_EXPORT.md).
+findings. With an incomplete assessment contract, it shows the evidence-only
+queue and withholds candidate output and exports. With a complete contract,
+portfolio, workstream, and asset-level views retain source, owner, milestone,
+and finding traceability. Every merge and disposition remains review-required.
+See [POAM_EXPORT.md](POAM_EXPORT.md).
 
 ## Primary API contracts
 
@@ -56,7 +54,7 @@ merge and disposition remains review-required. See [POAM_EXPORT.md](POAM_EXPORT.
 |---|---|
 | Dashboard | `GET /api/v1/dashboard/overview` |
 | Documents/components/libraries | `GET /api/v1/inventory/documents`, `GET /api/v1/documents/{id}/components`, `GET /api/v1/inventory/libraries` |
-| Accountability register/detail | `GET /api/v1/inventory/service-groups`, `GET /api/v1/inventory/service-groups/{collection}/{group}` |
+| Service Catalog | `GET /api/v1/service-catalog`; Admin writes and proposal decisions use the separately authorized `/api/v1/admin/service-catalog/*` routes |
 | Tracker planning metadata | `GET /api/v1/fips/team-milestones` |
 | Assessment | `GET /api/v1/fips/assessment` |
 | Exports | `GET /api/v1/fips/portfolio-poam.csv`, `GET /api/v1/fips/poam.csv`, `GET /api/v1/fips/poam-workstreams.csv`, `GET /api/v1/fips/compliance-package.zip` |
@@ -79,10 +77,11 @@ unavailable states instead of substituting sample data.
 
 ## Security boundary
 
-Local `dev` authentication is an eight-hour, HTTP-only click-through cookie and
-is blocked in production unless an explicit insecure override is set. Cloud mode
-verifies the ALB-signed OIDC token and requires a separate bearer-token trust
-boundary between Next.js and FastAPI. Raw document APIs are disabled by default.
+Local `dev` authentication is an eight-hour, HTTP-only click-through cookie. It
+requires `CBOM_AUTH_MODE=local-admin`, `CBOM_ENVIRONMENT=local`, and a loopback
+host; the legacy insecure override cannot enable it in cloud configuration.
+Cloud mode verifies the ALB-signed OIDC token and requires a separate bearer-token
+trust boundary between Next.js and FastAPI. Raw document APIs are disabled by default.
 
 Imported evidence remains read-only. The administrator page provides the
 checksum-gated asynchronous ingestion workflow plus user management and scoped
@@ -98,7 +97,7 @@ deletion and raw-source distribution remain operator workflows. See
 
 Use [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md). At minimum, run console lint,
 non-incremental typecheck, production build, API tests, and real-browser checks
-for the four primary read views plus the authorized Admin workspace, drawers,
-filters, pagination, themes, responsive navigation, exports, and a dry-run
-ingestion job. Production verification must not show HMR or React development
-tooling.
+for the primary read views plus the authorized Admin workspace, drawers,
+filters, pagination, themes, responsive navigation, the assessment-contract
+export behavior, and a dry-run ingestion job. Production verification must not
+show HMR or React development tooling.

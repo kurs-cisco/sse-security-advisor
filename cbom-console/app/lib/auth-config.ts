@@ -1,5 +1,4 @@
 export const DEV_AUTH_COOKIE = "cbom-dev-auth";
-export const ALB_AUTH_COOKIE = "CBOMAWSELBAuthSessionCookie";
 
 export type AuthMode = "local-admin" | "alb-oidc" | "disabled";
 

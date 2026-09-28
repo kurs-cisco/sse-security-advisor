@@ -15,9 +15,9 @@ FedRAMP 20x output is an incomplete evaluation preview, not a VDR/VER report.
 
 ## Assigned-scope review behavior
 
-Cloud human access comes from exact verified OIDC group values. The deployment
-baseline `CBOM_OIDC_GROUP_SCOPE_JSON` contains 83 exact groups: the three
-protected global groups `fedsse-admins`, `fedsse-external`, and
+Cloud human access comes from exact verified OIDC group values. The synthesized
+deployment baseline `CBOM_OIDC_GROUP_SCOPE_JSON` contains 83 exact groups: the
+three protected global groups `fedsse-admins`, `fedsse-external`, and
 `fedsse-scr2-leads`, plus paired Lead and Engineer groups for 40 registered
 services. Migration 021 adds an append-only Administrator-maintained policy
 registry. Until its first signed human Administrator publish, the deployment
@@ -47,35 +47,20 @@ Protected global groups cannot be edited through this workflow, and API tokens
 cannot read or publish mappings. Localhost development remains loopback-only
 local Administrator mode.
 
-Image `deploy-20260927-10` supersedes image 9 and carries the final
-Administrator mapping inventory display. For every registered mapping target,
-the Admin view reports current-source-file and fingerprinted-source-file
-**catalog inventory** counts. A zero fingerprinted count renders an
-**Evidence gap** state: coverage is unknown and the display makes no
-compliance, validation, authorization, product-evidence, or FIPS conclusion.
-Image 10 reached CloudFormation `UPDATE_COMPLETE`, completed its ECS web task
-revision-29 rollout at 1/1, and returned HTTP 200 from `/healthz`. A signed
-Admin browser flow loaded the mapping API with 40 rows: 534 current files and
-five zero-SHA/zero-file catalog inventory rows. It rendered the inventory-only
-disclaimer and five **Evidence gap** pills without the retired “CBOM source
-evidence” label. Image 11 then reached CloudFormation `UPDATE_COMPLETE` and
-completed ECS web task revision 30 at 1/1 with
-`enableProductScopedDetailEvidence=true`. It enables read-only catalog detail
-only where the caller supplies an exact verified collection/service/product
-triple and the current source SHA has an attributed product-routing decision.
-It does not enable roster changes, evidence observations, strict proposals,
-FIPS detail, candidate exports, or reporting output.
+The Admin mapping view reports current and fingerprinted **catalog inventory**
+counts. A zero fingerprinted count is an **Evidence gap** with unknown coverage;
+it does not establish compliance, validation, authorization, product evidence,
+or FIPS evidence. Product detail requires an exact verified
+collection/service/product triple and a current-file routing decision. The API
+keeps roster changes, evidence observations, strict proposals, FIPS detail,
+candidate exports, and reporting output closed until their independent gates
+are complete.
 
-Image 13 reached CloudFormation `UPDATE_COMPLETE`, completed ECS web task
-revision 31 at 1/1, and returned HTTP 200 from `/healthz`. It suppresses
-gated FIPS and review requests in Product Lead views when an exact grant has no
-immutable authorization reference, while the API independently keeps those
-routes closed. Signed DLP Government and Defense checks found two
-verification-pending panels, no gated background requests or export controls,
-and successful seven-document exact-scope reads for both Lead and Engineer.
-Unassigned, wrong direct-ID, FIPS, reference-less review, and Engineer-to-Admin
-probes failed closed. The live test identity has no SaaS grant and there is no
-second disjoint identity for cross-user verification.
+The [Admin mapping deployment record](CHANGE_RECORD_2026-09-27_ADMIN_GROUP_MAPPING.md)
+and [product-detail activation record](CHANGE_RECORD_2026-09-27_PRODUCT_DETAIL_ACTIVATION.md)
+preserve the dated deployment and signed-browser evidence. The
+[UI/UX rollout record](CHANGE_RECORD_2026-09-28_UI_UX_ROLLOUT.md) identifies
+the latest reviewed source snapshot and deployed image artifacts.
 
 ## Decisions required before service-team rollout
 

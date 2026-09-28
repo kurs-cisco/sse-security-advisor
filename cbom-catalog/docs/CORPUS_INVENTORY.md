@@ -1,6 +1,6 @@
-# Corpus inventory
+# Historical corpus inventory — 2026-09-18
 
-Current snapshot date: 2026-09-18. Scan root: `OneDrive_1_9-18-2026/`.
+Snapshot date: 2026-09-18. Scan root: `OneDrive_1_9-18-2026/`.
 The older `SSE_CBOMS/` snapshot remains available for retained provenance and
 mixed-format parser fixtures; its 2026-09-17 results are recorded in
 `ingestion-validation-2026-09-17.json`.
@@ -88,4 +88,3 @@ Rerun the host-only inventory after any corpus change:
 ```bash
 PYTHONPATH=src python -m cbom_catalog.cli inventory ../OneDrive_1_9-18-2026 --pretty
 ```
-

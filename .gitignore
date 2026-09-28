@@ -67,3 +67,6 @@ cbom-catalog/evidence/*.json
 
 # Raw externally shared assessment exports are local evidence, not source.
 /trac3-*.pdf
+
+# Superseded Confluence source export; preserve local bytes as private evidence.
+/FIPS+140-3+Engineering+Milestone+Tracker.doc
