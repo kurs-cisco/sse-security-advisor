@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import re
 import secrets
@@ -42,6 +43,7 @@ class Principal:
     credential_id: str | None = None
     email: str | None = None
     display_name: str | None = None
+    oidc_groups: frozenset[str] = frozenset()
 
     @property
     def is_admin(self) -> bool:
@@ -73,6 +75,17 @@ def _resolve_human(request: Request) -> Principal:
     subject = request.headers.get("x-cbom-user-sub", "").strip()
     email = request.headers.get("x-cbom-user-email", "").strip().casefold()
     display_name = request.headers.get("x-cbom-user-name", "").strip() or None
+    raw_groups = request.headers.get("x-cbom-user-groups", "").strip()
+    try:
+        parsed_groups = json.loads(raw_groups) if raw_groups else []
+    except ValueError as error:
+        raise AccessDenied("Verified OIDC groups claim is invalid", 401) from error
+    if not isinstance(parsed_groups, list) or len(parsed_groups) > 200 or any(
+        not isinstance(group, str) or not group or group != group.strip() or len(group) > 256
+        for group in parsed_groups
+    ):
+        raise AccessDenied("Verified OIDC groups claim is invalid", 401)
+    oidc_groups = frozenset(parsed_groups)
     if not issuer or not subject or not email:
         raise AccessDenied("Verified OIDC subject and email are required", 401)
 
@@ -141,11 +154,15 @@ def _resolve_human(request: Request) -> Principal:
     return Principal(
         kind="human",
         subject=f"oidc:{subject}",
-        role=row["role"],
-        scopes=frozenset(ALLOWED_TOKEN_SCOPES) if row["role"] == "admin" else frozenset(),
+        # Cloud authorization is derived by the deployment-owned OIDC group
+        # policy in api.py.  The legacy stored role is deliberately not used
+        # here: it remains only for existing API credential ownership.
+        role="viewer",
+        scopes=frozenset(),
         user_id=int(row["id"]),
         email=row["email"],
         display_name=row.get("display_name"),
+        oidc_groups=oidc_groups,
     )
 
 
@@ -172,8 +189,8 @@ def _resolve_api_token(token: str) -> Principal:
             raise AccessDenied("Invalid API credential", 401)
         if row["revoked_at"] is not None or row["expires_at"] <= datetime.now(UTC):
             raise AccessDenied("API credential is expired or revoked", 401)
-        if row["status"] != "active" or row["role"] != "admin":
-            raise AccessDenied("API credential owner is not an active administrator", 403)
+        if row["status"] != "active":
+            raise AccessDenied("API credential owner is not active", 403)
         database.execute(
             """
             UPDATE app_auth.api_credential
@@ -186,7 +203,11 @@ def _resolve_api_token(token: str) -> Principal:
     return Principal(
         kind="token",
         subject=f"token:{credential_id}",
-        role="admin",
+        # API credentials are never browser administrators.  Their explicit
+        # credential scopes are enforced independently of the retired user
+        # role column, preventing a legacy database role from granting cloud
+        # authorization after the OIDC group cutover.
+        role="viewer",
         scopes=frozenset(row["scopes"]),
         user_id=int(row["user_id"]),
         credential_id=str(row["credential_id"]),
@@ -197,9 +218,11 @@ def _resolve_api_token(token: str) -> Principal:
 
 def authenticate_request(request: Request, *, production: bool) -> Principal:
     mode = os.environ.get("CBOM_API_AUTH_MODE", "disabled").strip().casefold()
-    if mode == "disabled":
+    if mode in {"disabled", "local-admin"}:
         if production:
-            raise AccessDenied("Authentication must be configured in production", 503)
+            raise AccessDenied("Local administrator authentication is unavailable in production", 503)
+        if mode == "disabled" and os.environ.get("CBOM_API_AUTH_MODE", "").strip():
+            raise AccessDenied("Use CBOM_API_AUTH_MODE=local-admin for local access", 503)
         return Principal(
             kind="local",
             subject="local-development",
@@ -239,8 +262,18 @@ def require_scope(principal: Principal, scope: str) -> None:
 
 
 def read_scope_for_path(path: str) -> str:
+    if path.startswith("/api/v1/admin/service-group-mappings"):
+        return "__human_admin_group_policy_only__"
     if path.startswith("/api/v1/admin/ingestion"):
         return "ingestion:read"
+    if path.startswith("/api/v1/admin/users"):
+        return "users:admin"
+    if path.startswith("/api/v1/admin/tokens"):
+        return "tokens:admin"
+    if path.startswith("/api/v1/admin/overlays"):
+        return "annotations:write"
+    if path.startswith("/api/v1/admin/audit"):
+        return "__administrative_audit_not_available_to_tokens__"
     if path.startswith("/api/v1/fips/poam") or path.endswith("compliance-package.zip"):
         return "poam:read"
     if path.startswith("/api/v1/fips/"):

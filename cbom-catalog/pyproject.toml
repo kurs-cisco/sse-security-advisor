@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<10", "ruff>=0.9,<1"]
+dev = ["pytest>=8,<10", "ruff>=0.9,<1", "jsonschema>=4,<5"]
 
 [project.scripts]
 cbom-catalog = "cbom_catalog.cli:main"

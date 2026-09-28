@@ -14,6 +14,10 @@ from typing import Any
 
 TRACKER_SOURCE = {
     "source": "GitHub PR #1 authoritative owner-supplied planning update",
+    # The reviewed tracker mapping applies to this source corpus only.  A
+    # service slug is not globally unique, so callers must not use this
+    # planning data as a fallback for an identically named group elsewhere.
+    "source_collection": "sse-cboms",
     "repository": "kurs-cisco/sse-security-advisor",
     "pull_request": 1,
     "source_commit": "a57eaba9a8fb2c9d91e5db374d7aea5d9566a745",
@@ -497,6 +501,8 @@ def team_milestones(
 def enrich_poam_items(
     items: list[dict[str, Any]],
     target_module_contract: dict[str, Any] | None = None,
+    *,
+    preserve_accountable_owner: bool = False,
 ) -> list[dict[str, Any]]:
     """Attach group planning context to draft POA&M candidates.
 
@@ -520,7 +526,10 @@ def enrich_poam_items(
         }
         item["milestone_mitigation_date"] = explicit_dates[-1] if explicit_dates else None
         item["scheduled_completion_date"] = item["milestone_mitigation_date"]
-        item["responsible_owner"] = "; ".join(owners) if owners else "Not supplied — team confirmation required"
+        tracker_owner = "; ".join(owners) if owners else "Not supplied — team confirmation required"
+        item["team_tracker_responsible_owner"] = tracker_owner
+        if not preserve_accountable_owner:
+            item["responsible_owner"] = tracker_owner
         for link in item.get("service_scope_links", []):
             profile = profiles_by_group.get(_slug(str(link.get("service_group") or "")))
             if not profile:

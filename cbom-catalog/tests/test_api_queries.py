@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import json
+import os
 import threading
 import unittest
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 try:
     from cbom_catalog import api
@@ -20,6 +22,370 @@ except ModuleNotFoundError as exc:
 
 @unittest.skipIf(api is None, "install project dependencies to run API query tests")
 class ApiQueryTests(unittest.TestCase):
+    def test_assigned_scope_requires_exact_granted_collection_group_pair(self) -> None:
+        assigned = {"mode": "assigned", "grants": [{"source_collection": "collection-a", "service_group": "team-a", "product_scope_id": "secure-access-government", "boundary_name": "FedRAMP High/IL2"}]}
+        allowed = SimpleNamespace(url=SimpleNamespace(path="/api/v1/fips/assessment"), query_params={"source_collection": "collection-a", "service_group": "team-a", "product_scope_id": "secure-access-government"})
+        denied = SimpleNamespace(url=SimpleNamespace(path="/api/v1/fips/assessment"), query_params={"source_collection": "collection-a", "service_group": "team-b"})
+        with patch.object(api, "_fips_assessment_contract", return_value=None):
+            self.assertFalse(api._request_within_assigned_scope(allowed, assigned))
+        self.assertFalse(api._request_within_assigned_scope(denied, assigned))
+        detail = SimpleNamespace(url=SimpleNamespace(path="/api/v1/inventory/service-groups/collection-a/team-a"), query_params={})
+        self.assertFalse(api._request_within_assigned_scope(detail, assigned))
+
+    def test_assigned_scope_requires_pair_query_for_document_component_detail(self) -> None:
+        assigned = {"mode": "assigned", "grants": [{
+            "source_collection": "collection-a", "service_group": "team-a", "product_scope_id": "secure-access-government", "boundary_name": "FedRAMP High/IL2",
+        }]}
+        path = "/api/v1/documents/12/components"
+        missing_pair = SimpleNamespace(url=SimpleNamespace(path=path), query_params={})
+        granted_pair = SimpleNamespace(
+            url=SimpleNamespace(path=path),
+            query_params={"source_collection": "collection-a", "service_group": "team-a", "product_scope_id": "secure-access-government"},
+        )
+        other_pair = SimpleNamespace(
+            url=SimpleNamespace(path=path),
+            query_params={"source_collection": "collection-a", "service_group": "team-b"},
+        )
+        self.assertFalse(api._request_within_assigned_scope(missing_pair, assigned))
+        self.assertFalse(api._request_within_assigned_scope(granted_pair, assigned))
+        self.assertFalse(api._request_within_assigned_scope(other_pair, assigned))
+
+    def test_complete_fips_contract_must_match_assigned_ato(self) -> None:
+        assigned = {"mode": "assigned", "grants": [{"source_collection": "collection-a", "service_group": "team-a", "product_scope_id": "secure-access-government", "boundary_name": "FedRAMP High/IL2", "assessment_authorization_reference": "immutable-package-a"}]}
+        request = SimpleNamespace(
+            url=SimpleNamespace(path="/api/v1/fips/assessment"),
+            query_params={"source_collection": "collection-a", "service_group": "team-a", "product_scope_id": "secure-access-government"},
+        )
+        with (
+            patch.object(api, "_PRODUCT_SCOPED_DETAIL_EVIDENCE_ENABLED", True),
+            patch.object(api, "_product_fips_validation", return_value={"complete": True, "authorization_reference": "other-package"}),
+        ):
+            self.assertFalse(api._request_within_assigned_scope(request, assigned))
+
+    def test_fips_assessment_allows_only_exact_referenced_product_evidence_view(self) -> None:
+        assigned = {"mode": "assigned", "grants": [{
+            "source_collection": "collection-a", "service_group": "team-a",
+            "product_scope_id": "secure-access-government", "boundary_name": "FedRAMP High/IL2",
+            "assessment_authorization_reference": "immutable-package-a",
+        }]}
+        request = SimpleNamespace(
+            url=SimpleNamespace(path="/api/v1/fips/assessment"),
+            method="GET",
+            query_params={"source_collection": "collection-a", "service_group": "team-a", "product_scope_id": "secure-access-government"},
+        )
+        incomplete_contract = {
+            **request.query_params,
+            "authorization_reference": "immutable-package-a",
+        }
+        with patch.object(api, "_PRODUCT_SCOPED_DETAIL_EVIDENCE_ENABLED", True):
+            with patch.object(api, "_fips_assessment_contract", return_value=incomplete_contract):
+                self.assertTrue(api._request_within_assigned_scope(request, assigned))
+                for path in (
+                    "/api/v1/fips/reporting/20x-preview",
+                    "/api/v1/fips/poam.csv",
+                    "/api/v1/fips/poam-workstreams.csv",
+                    "/api/v1/fips/portfolio-poam.csv",
+                    "/api/v1/fips/compliance-package.zip",
+                ):
+                    with self.subTest(path=path):
+                        request.url.path = path
+                        self.assertFalse(api._request_within_assigned_scope(request, assigned))
+                request.url.path = "/api/v1/fips/assessment"
+                request.method = "POST"
+                self.assertFalse(api._request_within_assigned_scope(request, assigned))
+                request.method = "GET"
+                request.query_params = {**request.query_params, "service_group": "team-b"}
+                self.assertFalse(api._request_within_assigned_scope(request, assigned))
+                request.query_params = {**request.query_params, "service_group": "team-a"}
+            with patch.object(api, "_fips_assessment_contract", return_value={**incomplete_contract, "authorization_reference": "other-package"}):
+                self.assertFalse(api._request_within_assigned_scope(request, assigned))
+            with patch.object(api, "_fips_assessment_contract", return_value={**incomplete_contract, "authorization_reference": ""}):
+                self.assertFalse(api._request_within_assigned_scope(request, assigned))
+            with patch.object(api, "_fips_assessment_contract", return_value={"authorization_reference": "immutable-package-a"}):
+                self.assertFalse(api._request_within_assigned_scope(request, assigned))
+            with patch.object(api, "_product_fips_validation", return_value={"complete": True, "authorization_reference": "immutable-package-a"}):
+                self.assertTrue(api._request_within_assigned_scope(request, assigned))
+        with (
+            patch.object(api, "_PRODUCT_SCOPED_DETAIL_EVIDENCE_ENABLED", False),
+            patch.object(api, "_fips_assessment_contract", return_value=incomplete_contract),
+        ):
+            self.assertFalse(api._request_within_assigned_scope(request, assigned))
+
+    def test_admin_operational_reads_require_explicit_portfolio_grant(self) -> None:
+        request = SimpleNamespace(url=SimpleNamespace(path="/api/v1/admin/overlays"), query_params={})
+        self.assertFalse(api._request_within_assigned_scope(request, {"mode": "assigned", "grants": []}))
+        self.assertFalse(api._request_within_assigned_scope(request, {"mode": "portfolio", "grants": []}))
+        self.assertTrue(api._request_within_assigned_scope(request, {"mode": "portfolio", "role": "admin", "grants": []}))
+
+    def test_assigned_admin_cannot_reach_global_write_handlers(self) -> None:
+        principal = api.Principal(
+            kind="human", subject="oidc:assigned-admin", role="viewer",
+            scopes=frozenset(), user_id=7, oidc_groups=frozenset({"fedsse-team-a-engineers"}),
+        )
+        group_policy = json.dumps({"version": "test", "groups": {
+            "fedsse-admins": {"access": "admin"},
+            "fedsse-team-a-engineers": {"access": "engineer", "service_key": "team-a", "grants": [{
+                "source_collection": "collection-a", "service_group": "team-a", "product_scope_id": "secure-access-government", "boundary_name": "FedRAMP High/IL2",
+            }]},
+        }})
+        reached_handler = False
+
+        async def next_handler(_request):
+            nonlocal reached_handler
+            reached_handler = True
+            return api.JSONResponse({"ok": True})
+
+        for method, path in (
+            ("POST", "/api/v1/admin/tokens"),
+            ("PATCH", "/api/v1/admin/users/7"),
+            ("DELETE", "/api/v1/admin/overlays/3"),
+        ):
+            with self.subTest(method=method, path=path):
+                request = api.Request({
+                    "type": "http", "method": method, "path": path,
+                    "query_string": b"", "headers": [],
+                    "scheme": "http", "server": ("test", 80),
+                    "client": ("127.0.0.1", 1000),
+                })
+                with (
+                    patch.dict(os.environ, {"CBOM_OIDC_GROUP_SCOPE_JSON": group_policy}),
+                    patch.object(api, "authenticate_request", return_value=principal),
+                ):
+                    response = asyncio.run(api.access_controls(request, next_handler))
+                self.assertEqual(response.status_code, 403)
+                self.assertFalse(reached_handler)
+        request = api.Request({
+            "type": "http", "method": "POST", "path": "/api/v1/admin/tokens",
+            "query_string": b"", "headers": [], "scheme": "http",
+            "server": ("test", 80), "client": ("127.0.0.1", 1000),
+        })
+        with (
+            patch.dict(os.environ, {"CBOM_OIDC_GROUP_SCOPE_JSON": group_policy}),
+            patch.object(api, "authenticate_request", return_value=principal),
+        ):
+            response = asyncio.run(api.access_controls(request, next_handler))
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(reached_handler)
+        admin_principal = api.Principal(
+            kind="human", subject="oidc:group-admin", role="viewer", scopes=frozenset(),
+            user_id=7, oidc_groups=frozenset({"fedsse-admins"}),
+        )
+        admin_policy = json.dumps({"version": "test", "groups": {"fedsse-admins": {"access": "admin"}}})
+        with (
+            patch.dict(os.environ, {"CBOM_OIDC_GROUP_SCOPE_JSON": admin_policy}),
+            patch.object(api, "authenticate_request", return_value=admin_principal),
+            patch.object(api, "_rate_limited", return_value=False),
+        ):
+            response = asyncio.run(api.access_controls(request, next_handler))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(reached_handler)
+
+    def test_current_user_retains_configured_scope(self) -> None:
+        principal = api.Principal(
+            kind="human", subject="oidc:bootstrap-admin", role="viewer",
+            scopes=frozenset(), user_id=7, oidc_groups=frozenset({"fedsse-team-a-engineers"}),
+        )
+        mapping = json.dumps({"version": "test", "groups": {
+            "fedsse-admins": {"access": "admin"},
+            "fedsse-team-a-engineers": {"access": "engineer", "service_key": "team-a", "grants": [{
+                "source_collection": "collection-a", "service_group": "team-a", "product_scope_id": "secure-access-government", "boundary_name": "FedRAMP High/IL2",
+            }]},
+        }})
+
+        async def next_handler(_request):
+            return api.JSONResponse({"role": "admin"})
+
+        request = api.Request({
+            "type": "http", "method": "GET", "path": "/api/v1/auth/me",
+            "query_string": b"", "headers": [], "scheme": "http",
+            "server": ("test", 80), "client": ("127.0.0.1", 1000),
+        })
+        with (
+            patch.dict(os.environ, {"CBOM_OIDC_GROUP_SCOPE_JSON": mapping}),
+            patch.object(api, "authenticate_request", return_value=principal),
+            patch.object(api, "_rate_limited", return_value=False),
+        ):
+            response = asyncio.run(api.access_controls(request, next_handler))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(request.state.assigned_scope["grants"][0]["service_group"], "team-a")
+
+    def test_current_user_bootstraps_without_a_scope_grant(self) -> None:
+        principal = api.Principal(
+            kind="human", subject="oidc:bootstrap-admin", role="admin",
+            scopes=frozenset(), user_id=7,
+        )
+        reached_handler = False
+
+        async def next_handler(_request):
+            nonlocal reached_handler
+            reached_handler = True
+            return api.JSONResponse({"role": "admin"})
+
+        request = api.Request({
+            "type": "http", "method": "GET", "path": "/api/v1/auth/me",
+            "query_string": b"", "headers": [], "scheme": "http",
+            "server": ("test", 80), "client": ("127.0.0.1", 1000),
+        })
+        with (
+            patch.dict(os.environ, {"CBOM_PRINCIPAL_SCOPE_JSON": ""}),
+            patch.object(api, "authenticate_request", return_value=principal),
+            patch.object(api, "_rate_limited", return_value=False),
+        ):
+            response = asyncio.run(api.access_controls(request, next_handler))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(reached_handler)
+        self.assertIsNone(getattr(request.state, "assigned_scope", "missing"))
+
+    def test_unscoped_catalog_read_remains_denied_during_bootstrap(self) -> None:
+        principal = api.Principal(
+            kind="human", subject="oidc:bootstrap-admin", role="admin",
+            scopes=frozenset(), user_id=7,
+        )
+        reached_handler = False
+
+        async def next_handler(_request):
+            nonlocal reached_handler
+            reached_handler = True
+            return api.JSONResponse({"catalog": "must not be returned"})
+
+        request = api.Request({
+            "type": "http", "method": "GET", "path": "/api/v1/documents",
+            "query_string": b"", "headers": [], "scheme": "http",
+            "server": ("test", 80), "client": ("127.0.0.1", 1000),
+        })
+        with (
+            patch.dict(os.environ, {"CBOM_PRINCIPAL_SCOPE_JSON": ""}),
+            patch.object(api, "authenticate_request", return_value=principal),
+        ):
+            response = asyncio.run(api.access_controls(request, next_handler))
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(reached_handler)
+
+    def test_pair_query_does_not_unlock_an_unscoped_catalog_route(self) -> None:
+        assigned = {"mode": "assigned", "grants": [{"source_collection": "collection-a", "service_group": "team-a", "ato_boundary": "ATO-A"}]}
+        request = SimpleNamespace(
+            url=SimpleNamespace(path="/api/v1/stats"),
+            query_params={"source_collection": "collection-a", "service_group": "team-a"},
+        )
+        self.assertFalse(api._request_within_assigned_scope(request, assigned))
+
+    def test_service_register_etag_parts_include_the_selected_pair(self) -> None:
+        with (
+            patch.object(api, "_cached_fips_assessment", return_value=({}, 7, False)),
+            patch.object(api, "_cached_catalog_value", return_value=({"service_groups": []}, 7, False)),
+            patch.object(api, "_service_group_register_rows", return_value=[]),
+            patch.object(api, "_active_service_impact_map", return_value={}),
+            patch.object(api, "_active_overlay_map", return_value={}),
+            patch.object(api, "_conditional_json_response", return_value=api.Response()) as respond,
+        ):
+            api.service_group_register(
+                SimpleNamespace(), source_collection="collection-a",
+                service_group="team-a", limit=50, offset=0,
+            )
+        self.assertEqual(respond.call_args.kwargs["parts"][:2], ("collection-a", "team-a"))
+
+    def test_assigned_scope_rejects_duplicate_pair_with_different_ato(self) -> None:
+        principal = api.Principal(
+            kind="human", subject="oidc:scope-test", role="viewer", scopes=frozenset()
+        )
+        mapping = {
+            principal.subject: {
+                "grants": [
+                    {"source_collection": "collection-a", "service_group": "team-a", "ato_boundary": "ATO-A"},
+                    {"source_collection": "collection-a", "service_group": "team-a", "ato_boundary": "ATO-B"},
+                ]
+            }
+        }
+        with patch.dict(api.os.environ, {"CBOM_PRINCIPAL_SCOPE_JSON": json.dumps(mapping)}, clear=False):
+            with self.assertRaises(api.AssignedScopeError):
+                api._assigned_scope_for(principal)
+
+    def test_fips_scope_cte_uses_list_predicate_for_multi_group_contract(self) -> None:
+        sql, params = api._fips_scope_cte("collection-a", ["team-a", "team-b"])
+        self.assertIn("sg.slug = ANY(%s)", sql)
+        self.assertEqual(params, ("collection-a", ["team-a", "team-b"]))
+
+    def test_20x_preview_keeps_internal_id_distinct_from_missing_run(self) -> None:
+        assessment = {"assessment_run_id": "ASSESS-INTERNAL", "assessment_run": None, "assessment_contract": {"complete": False}, "poam_candidate_records": []}
+        with patch.object(api, "_cached_fips_assessment", return_value=(assessment, 4, False)):
+            result = api.fips_20x_preview()
+        self.assertIsNone(result["assessment_run_id"])
+        self.assertEqual(result["internal_analysis_id"], "ASSESS-INTERNAL")
+        self.assertFalse(result["reportable"])
+
+    def test_portfolio_poam_summary_exposes_semantic_metric_metadata(self) -> None:
+        assessment = {
+            "assessment_contract": {"complete": True, "fingerprint": "assessment"},
+            "summary": {"deduplicated_poam_candidates": 2},
+            "summary_metric_metadata": {
+                "deduplicated_poam_candidates": {
+                    "label": "Deduplicated draft POA&M candidates",
+                    "unit": "candidates",
+                    "interpretation": "Draft only.",
+                },
+            },
+        }
+        with (
+            patch.object(api, "_cached_fips_assessment", return_value=(assessment, 1, False)),
+            patch.object(api, "_conditional_json_response", return_value=api.Response()) as response,
+        ):
+            api.portfolio_poam_summary(SimpleNamespace())
+        payload = response.call_args.args[1]
+        self.assertEqual(payload["summary"]["deduplicated_poam_candidates"], 2)
+        self.assertEqual(
+            payload["summary_metric_metadata"]["deduplicated_poam_candidates"]["label"],
+            "Deduplicated draft POA&M candidates",
+        )
+
+    def test_load_fips_assessment_binds_complete_multi_group_contract_at_sql_layer(self) -> None:
+        contract = {
+            "ato_boundary": "Test ATO", "source_collection": "collection-a",
+            "service_groups": ["team-a", "team-b"], "accountable_owner": "Owner",
+            "assessment_as_of": "2026-09-22T00:00:00+00:00", "reporting_profile": "rev5-candidate",
+            "authority_register": {"path": "authority", "sha256": "a" * 64, "retrieved_at": "2026-09-22"},
+        }
+        expected = {"assessment_contract": {"complete": False}, "summary": {}, "service_groups": []}
+        with (
+            patch.object(api, "_fetch_all", side_effect=[[], [], []]) as fetch_all,
+            patch.object(api, "_active_target_module_contract", return_value={"teams": []}) as planning,
+            patch.object(api, "build_assessment", return_value=expected) as build,
+            patch.object(api, "portfolio_delivery_waves", return_value=[]) as waves,
+        ):
+            result = api._load_fips_assessment(None, None, contract)
+        self.assertIs(result, expected)
+        self.assertEqual(fetch_all.call_count, 3)
+        for call in fetch_all.call_args_list:
+            sql, params = call.args
+            self.assertIn("sg.slug = ANY(%s)", sql)
+            self.assertEqual(params, ("collection-a", ["team-a", "team-b"]))
+        self.assertEqual(build.call_args.kwargs["scope"], {"source_collection": "collection-a", "service_group": ["team-a", "team-b"]})
+        planning.assert_not_called()
+        waves.assert_not_called()
+        self.assertEqual(result["portfolio_delivery_waves"], [])
+        self.assertIn("Portfolio delivery waves are unavailable", result["limitations"][-1])
+
+    def test_incomplete_contract_hides_all_candidate_dimensions(self) -> None:
+        assessment = {
+            "assessment_contract": {"complete": False, "missing_required_facts": ["ato_boundary"]},
+            "summary": {"candidate_gap_findings": 3, "deduplicated_poam_candidates": 3, "proposed_remediation_workstreams": 2, "portfolio_poam_candidates": 2},
+            "poam_items": [{"poam_candidate_id": "FIPS3-ONE"}],
+            "poam_candidate_records": [{"poam_candidate_id": "FIPS3-ONE"}],
+            "poam_workstreams": [{"workstream_id": "FIPSW-ONE"}],
+            "portfolio_poam_items": [{"portfolio_poam_id": "FIPS3-PORTFOLIO-ACTIVE-CERT"}],
+            "portfolio_delivery_waves": [{"wave": "October"}],
+        }
+        shaped = api._shape_fips_assessment(
+            assessment, include_findings=False, query=None, poam_limit=20, poam_offset=0
+        )
+        self.assertEqual(shaped["poam_items"], [])
+        self.assertEqual(shaped["poam_candidate_records"], [])
+        self.assertEqual(shaped["poam_workstreams"], [])
+        self.assertEqual(shaped["portfolio_poam_items"], [])
+        self.assertEqual(shaped["portfolio_delivery_waves"], [{"wave": "October"}])
+        self.assertEqual(shaped["poam_page"]["total"], 0)
+        self.assertEqual(shaped["summary"]["portfolio_poam_candidates"], 0)
+        self.assertEqual(shaped["summary"]["candidate_gap_findings"], 0)
+
     def test_admin_helper_enforces_token_scope(self) -> None:
         principal = api.Principal(
             kind="token",
@@ -64,7 +430,8 @@ class ApiQueryTests(unittest.TestCase):
                 after_state={"observed_at": observed},
             )
 
-        self.assertEqual(recorded[0][-1], {"observed_at": "2026-09-22T12:00:00+00:00"})
+        self.assertEqual(recorded[0][-2], {"observed_at": "2026-09-22T12:00:00+00:00"})
+        self.assertEqual(recorded[0][-1], "success")
 
     def test_distinct_cold_cache_builders_do_not_block_each_other(self) -> None:
         barrier = threading.Barrier(2)
@@ -107,6 +474,7 @@ class ApiQueryTests(unittest.TestCase):
 
     def test_fips_response_is_compact_filtered_and_paged(self) -> None:
         assessment = {
+            "assessment_contract": {"complete": True},
             "summary": {"deduplicated_poam_candidates": 3},
             "findings": [{"finding_id": "large-raw-finding"}],
             "poam_items": [
@@ -130,6 +498,7 @@ class ApiQueryTests(unittest.TestCase):
 
     def test_fips_response_applies_versioned_overlay_without_mutating_evidence(self) -> None:
         source = {
+            "assessment_contract": {"complete": True},
             "poam_items": [
                 {
                     "poam_candidate_id": "FIPS3-A",
@@ -213,6 +582,7 @@ class ApiQueryTests(unittest.TestCase):
 
     def test_fips_csv_is_a_draft_attachment_with_a_date_specific_filename(self) -> None:
         assessment = {
+            "assessment_contract": {"complete": True},
             "policy": {"assessment_date": "2026-09-18"},
             "poam_items": [{
                 "poam_candidate_id": "FIPS3-EXAMPLE",
@@ -245,6 +615,7 @@ class ApiQueryTests(unittest.TestCase):
 
     def test_compliance_package_has_candidate_manifest_and_both_poam_views(self) -> None:
         assessment = {
+            "assessment_contract": {"complete": True},
             "policy": {"assessment_date": "2026-09-18"},
             "scope": {"source_collection": "collection-a"},
             "summary": {"deduplicated_poam_candidates": 1},
@@ -429,10 +800,11 @@ class ApiQueryTests(unittest.TestCase):
         self.assertTrue(result[0]["il2"]["admin_override"])
         self.assertEqual(result[0]["admin_overlay"]["version"], 3)
 
-    def test_service_group_detail_uses_canonical_candidate_and_workstream_ids(self) -> None:
+    def test_service_group_detail_withholds_candidates_and_planning_without_collection_provenance(self) -> None:
         service_key = "collection-a/team"
         canonical = {
             "assessment_run_id": "RUN-CANONICAL",
+            "assessment_run": None,
             "service_groups": [{
                 "service": service_key,
                 "service_group_name": "Team",
@@ -454,18 +826,25 @@ class ApiQueryTests(unittest.TestCase):
                 "affected_service_groups": [service_key],
             }],
         }
+        canonical_with_run = {
+            **canonical,
+            "assessment_run": {"assessment_run_id": "RUN-CANONICAL"},
+        }
         scoped = {
+            **canonical,
             "assessment_run_id": "RUN-SCOPED",
             "policy": {},
             "summary": {},
             "coverage_gaps": [],
-            "findings": [{"finding_id": "FINDING-1"}],
-            "poam_items": [{
-                "poam_candidate_id": "FIPS3-SCOPED-RECOMPUTED",
-                "affected_services": [service_key],
-                "linked_finding_ids": ["FINDING-1"],
+            "findings": [{
+                "finding_id": "FINDING-1", "rule_id": "FIPS-RULE", "title": "Evidence observation",
+                "poam_eligible": True, "poam_candidate_id": "FIPS3-CANONICAL",
+                "poam_candidate_ids": ["FIPS3-CANONICAL"], "candidate_status": "draft",
+                "remediation": "Candidate remediation text", "risk_rationale": "Candidate risk text",
+                "workstream_ids": ["FIPSW-CANONICAL"],
             }],
         }
+        scoped_with_run = {**scoped, "assessment_run": {"assessment_run_id": "RUN-CANONICAL"}}
         overview = {"service_groups": [{
             "source_collection": "collection-a",
             "slug": "team",
@@ -481,7 +860,9 @@ class ApiQueryTests(unittest.TestCase):
         }]}
 
         with (
-            patch.object(api, "_cached_fips_assessment", side_effect=[(scoped, 1, False), (canonical, 1, False)]),
+            patch.object(api, "_cached_fips_assessment", side_effect=[
+                (scoped, 1, False), (scoped_with_run, 1, False), (scoped_with_run, 1, False),
+            ]),
             patch.object(api, "_cached_catalog_value", return_value=(overview, 1, False)),
             patch.object(api, "_active_target_module_contract", return_value=None),
             patch.object(api, "team_milestones", return_value=milestones),
@@ -491,25 +872,66 @@ class ApiQueryTests(unittest.TestCase):
             patch.object(api, "_component_inventory_rows", return_value=([], 0)),
         ):
             result = api.service_group_register_detail(
-                "collection-a", "team", 50, 0, 50, 0
+                "collection-a", "team", product_scope_id="secure-access-government",
+                document_limit=50, document_offset=0, library_limit=50, library_offset=0,
+            )
+            positive = api.service_group_register_detail(
+                "collection-a", "team", product_scope_id="secure-access-government",
+                document_limit=50, document_offset=0, library_limit=50, library_offset=0,
+            )
+            admin = api.service_group_register_detail(
+                "collection-a", "team", product_scope_id=None,
+                document_limit=50, document_offset=0, library_limit=50, library_offset=0,
+                request=SimpleNamespace(state=SimpleNamespace(assigned_scope={
+                    "mode": "portfolio", "role": "admin",
+                })),
             )
 
-        self.assertEqual(
-            [item["poam_candidate_id"] for item in result["assessment"]["poam_items"]],
-            ["FIPS3-CANONICAL"],
-        )
-        self.assertEqual(
-            result["assessment"]["poam_workstreams"][0]["workstream_id"],
-            "FIPSW-CANONICAL",
-        )
+        self.assertTrue(result["evidence_only"])
+        self.assertFalse(result["candidate_only"])
+        self.assertEqual(result["profile"]["effective_owners"], [])
+        self.assertEqual(result["profile"]["poam_candidate_ids"], [])
+        self.assertEqual(result["assessment"]["poam_items"], [])
+        self.assertEqual(result["assessment"]["poam_workstreams"], [])
+        self.assertEqual(result["assessment"]["portfolio_poam_items"], [])
+        self.assertEqual(result["assessment"]["summary"]["candidate_dimensions"], 0)
         self.assertEqual(
             result["assessment"]["canonical_assessment_run_id"],
-            "RUN-CANONICAL",
+            None,
         )
+        self.assertEqual(positive["assessment"]["canonical_assessment_run_id"], "RUN-CANONICAL")
+        observation = result["assessment"]["findings"][0]
+        self.assertFalse(observation["poam_eligible"])
+        self.assertEqual(observation["assertion_state"], "evidence_observation")
+        for hidden in ("poam_candidate_id", "poam_candidate_ids", "candidate_status", "remediation", "risk_rationale", "workstream_ids"):
+            self.assertNotIn(hidden, observation)
+        self.assertFalse(admin["evidence_only"])
+        self.assertEqual(admin["profile"]["effective_owners"], ["Owner"])
         self.assertEqual(
-            result["assessment"]["findings"][0]["poam_candidate_ids"],
+            [item["poam_candidate_id"] for item in admin["assessment"]["poam_items"]],
             ["FIPS3-CANONICAL"],
         )
+
+    def test_team_milestones_projects_only_selected_group_and_tracker_rows(self) -> None:
+        payload = {
+            "groups": [
+                {"service_group": "team-a", "owners": ["A"]},
+                {"service_group": "team-b", "owners": ["B"]},
+            ],
+            "all_tracker_rows": [
+                {"team": "A", "mapped_service_groups": ["team-a"]},
+                {"team": "Shared", "mapped_service_groups": ["team-a", "team-b"]},
+                {"team": "B", "mapped_service_groups": ["team-b"]},
+            ],
+        }
+        with (
+            patch.object(api, "_active_target_module_contract", return_value=None),
+            patch.object(api, "team_milestones", return_value=payload),
+        ):
+            result = api.fips_team_milestones("collection-a", "team-a")
+
+        self.assertEqual([row["service_group"] for row in result["groups"]], ["team-a"])
+        self.assertEqual([row["team"] for row in result["all_tracker_rows"]], ["A", "Shared"])
 
     def test_service_group_register_filters_missing_planning_dates(self) -> None:
         rows = [
@@ -569,9 +991,11 @@ class ApiQueryTests(unittest.TestCase):
         self.assertIn("sc.slug = %s", sql)
         self.assertIn("sg.slug = %s", sql)
         self.assertIn("sf.source_path ILIKE %s", sql)
+        self.assertIn("WITH inventory AS MATERIALIZED", sql)
+        self.assertIn("array_agg(sf.source_path", sql)
         self.assertEqual(
-            params[:3],
-            ("collection-a", "team", "%only-in-a.json%"),
+            params[:5],
+            ("collection-a", "team", "collection-a", "team", "%only-in-a.json%"),
         )
 
     def test_document_components_supports_search_and_explicit_crypto_filter(self) -> None:
@@ -581,6 +1005,8 @@ class ApiQueryTests(unittest.TestCase):
         ):
             api.document_components(
                 document_id=7,
+                source_collection="collection-a",
+                service_group="team",
                 query="openssl",
                 crypto_only=True,
                 limit=25,
@@ -598,23 +1024,57 @@ class ApiQueryTests(unittest.TestCase):
             patch.object(api, "_fetch_one", side_effect=[{"id": 7}, {"total": 4}]),
             patch.object(api, "_fetch_all", return_value=[{"occurrence_id": 1}]),
         ):
-            result = api.document_components(document_id=7, include_total=True, limit=25, offset=0)
+            result = api.document_components(
+                document_id=7, source_collection="collection-a", service_group="team",
+                include_total=True, limit=25, offset=0,
+            )
 
         self.assertEqual(result["items"], [{"occurrence_id": 1}])
         self.assertEqual(result["total"], 4)
         self.assertEqual(result["limit"], 25)
+
+    def test_admin_document_components_can_read_portfolio_detail(self) -> None:
+        with (
+            patch.object(api, "_fetch_one", side_effect=[{"id": 7}, {"total": 2}]) as fetch_one,
+            patch.object(api, "_fetch_all", return_value=[{"occurrence_id": 1}]),
+        ):
+            result = api.document_components(
+                document_id=7, source_collection=None, service_group=None,
+                include_total=True, limit=25, offset=0,
+            )
+
+        self.assertIn("sf.is_present", fetch_one.call_args_list[0].args[0])
+        self.assertEqual(result["total"], 2)
+
+    def test_component_usage_can_read_portfolio_detail(self) -> None:
+        with (
+            patch.object(api, "_fetch_one", side_effect=[{"id": 9}, {"total": 3}]),
+            patch.object(api, "_fetch_all", return_value=[{"occurrence_id": 1}]) as fetch,
+        ):
+            result = api.component_usage(
+                component_id=9, source_collection=None, service_group=None,
+                explicit_crypto_only=True, include_total=True, limit=25, offset=0,
+            )
+
+        sql, params = fetch.call_args.args
+        self.assertNotIn("sc.slug = %s", sql)
+        self.assertEqual(params, (9, 25, 0))
+        self.assertEqual(result["total"], 3)
 
     def test_component_usage_explicit_filter_matches_library_aggregate_semantics(self) -> None:
         with (
             patch.object(api, "_fetch_one", side_effect=[{"id": 9}, {"total": 3}]),
             patch.object(api, "_fetch_all", return_value=[{"occurrence_id": 1, "explicit_crypto": True}]) as fetch,
         ):
-            result = api.component_usage(component_id=9, explicit_crypto_only=True, include_total=True, limit=25, offset=0)
+            result = api.component_usage(
+                component_id=9, source_collection="collection-a", service_group="team",
+                explicit_crypto_only=True, include_total=True, limit=25, offset=0,
+            )
 
         sql, params = fetch.call_args.args
         self.assertIn("fedramp:fips:crypto-relevant", sql)
         self.assertIn("dc.component_id = %s AND sf.is_present", sql)
-        self.assertEqual(params, (9, 25, 0))
+        self.assertEqual(params, (9, "collection-a", "team", 25, 0))
         self.assertEqual(result["total"], 3)
 
     def test_component_aggregates_are_scoped_before_grouping(self) -> None:
@@ -710,6 +1170,8 @@ class ApiQueryTests(unittest.TestCase):
         ):
             result = api.dependency_graph(
                 document_id=7,
+                source_collection="collection-a",
+                service_group="team",
                 relationship_type=["DEPENDS_ON"],
                 node_limit=80,
                 edge_limit=240,

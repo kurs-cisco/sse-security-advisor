@@ -48,11 +48,37 @@ def test_manifest_is_canonical_and_checksum_gated() -> None:
         files=reversed(_manifest_files()),
     )
     assert [item["path"] for item in manifest["files"]] == ["Alpha/a.csv", "Zeta/b.json"]
+    assert manifest["schema_version"] == 2
+    assert manifest["product_scope_ids"] == [
+        "secure-access-defense", "secure-access-government"
+    ]
     assert manifest["files"][1]["modified_at"] == "2026-09-18T12:00:00Z"
     digest = manifest_sha256(manifest)
     assert validate_manifest_checksum(manifest, digest) == digest
     with pytest.raises(IngestionManifestError, match="Manifest checksum mismatch"):
         validate_manifest_checksum(manifest, "0" * 64)
+
+
+def test_manifest_product_scope_selection_is_canonical_and_hash_bound() -> None:
+    common = {
+        "source_collection": "sse-cboms", "dry_run": True,
+        "authoritative_snapshot": False, "files": _manifest_files(),
+    }
+    defaulted = normalize_manifest(**common)
+    explicit = normalize_manifest(
+        **common,
+        product_scope_ids=["secure-access-government", "secure-access-defense"],
+    )
+    government_only = normalize_manifest(
+        **common, product_scope_ids=["secure-access-government"],
+    )
+    assert defaulted["product_scope_ids"] == explicit["product_scope_ids"]
+    assert manifest_sha256(defaulted) == manifest_sha256(explicit)
+    assert manifest_sha256(defaulted) != manifest_sha256(government_only)
+    with pytest.raises(IngestionManifestError, match="unsupported product scope"):
+        normalize_manifest(**common, product_scope_ids=["untrusted-product"])
+    with pytest.raises(IngestionManifestError, match="duplicates"):
+        normalize_manifest(**common, product_scope_ids=["secure-access-government", "secure-access-government"])
 
 
 @pytest.mark.parametrize(

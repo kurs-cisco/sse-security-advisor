@@ -4,9 +4,10 @@ import csv
 import hashlib
 import io
 import os
+import re
 from collections import defaultdict
 from datetime import date, datetime
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 POLICY_VERSION = "FIPS1403-MIGRATION-2026-09-18"
@@ -67,6 +68,37 @@ LIMITATIONS = [
     "The exact module boundary, version, operational environment, approved mode, and certificate must be verified.",
     "Risk rating, scope, vendor dependency, milestones, and POA&M status require CSP, assessor, and AO review.",
 ]
+
+# Display metadata is deliberately kept alongside the assessment result rather
+# than inferred by a client. It prevents inventory and deduplication counts
+# from being presented as a CMVP, FedRAMP, or deployment conclusion.
+SUMMARY_METRIC_METADATA = {
+    "documents_with_fips_evidence": {
+        "label": "Documents with parsed FIPS/CMVP-related records",
+        "unit": "documents",
+        "interpretation": "Inventory or tool-record coverage only; not CMVP validation, deployed use, approved mode, or compliance.",
+    },
+    "documents_without_fips_evidence": {
+        "label": "Documents without parsed FIPS/CMVP-related records",
+        "unit": "documents",
+        "interpretation": "Missing parsed records prevent a posture determination; this is not a favorable conclusion.",
+    },
+    "candidate_gap_findings": {
+        "label": "Eligible candidate findings before POA&M deduplication",
+        "unit": "findings",
+        "interpretation": "Decision-support findings only; authorized assessor, system-owner, and AO review remain required.",
+    },
+    "deduplicated_poam_candidates": {
+        "label": "Deduplicated draft POA&M candidates",
+        "unit": "candidates",
+        "interpretation": "Draft candidates grouped by the documented deduplication rules; not approved POA&M items or authorization decisions.",
+    },
+    "coverage_gap_observations": {
+        "label": "Evidence-collection requests",
+        "unit": "observations",
+        "interpretation": "Missing or conflicting catalog facts prevent a posture determination. These observations are not vulnerabilities or POA&M candidates.",
+    },
+}
 
 FALSE_VALUES = {"0", "false", "no", "off", "disabled", "not-validated", "not validated"}
 TRUE_VALUES = {"1", "true", "yes", "on", "enabled", "validated"}
@@ -221,6 +253,88 @@ def _digest(*parts: Any) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
+def _canonical_json(value: Any) -> str:
+    """Return a stable representation used only for derived run identities."""
+    import json
+
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _assessment_contract(
+    contract: Mapping[str, Any] | None,
+    *,
+    scope: Mapping[str, Any] | None,
+    assessment_date: date,
+) -> tuple[dict[str, Any], list[str]]:
+    """Normalize supplied assessment facts without filling gaps from catalog data."""
+    supplied = dict(contract or {})
+    required = {
+        "ato_boundary": supplied.get("ato_boundary"),
+        "source_collection": supplied.get("source_collection"),
+        "service_groups": supplied.get("service_groups"),
+        "accountable_owner": supplied.get("accountable_owner"),
+        "assessment_as_of": supplied.get("assessment_as_of"),
+        "authority_register": supplied.get("authority_register"),
+        "reporting_profile": supplied.get("reporting_profile"),
+    }
+    # The selected API scope may narrow a supplied contract, but never completes it.
+    if scope and scope.get("source_collection") and required["source_collection"]:
+        if scope["source_collection"] != required["source_collection"]:
+            required["source_collection"] = None
+    if scope and scope.get("service_group") and isinstance(required["service_groups"], list):
+        selected = scope["service_group"]
+        selected_groups = selected if isinstance(selected, list) else [selected]
+        if not selected_groups or not all(group in required["service_groups"] for group in selected_groups):
+            required["service_groups"] = []
+        else:
+            required["service_groups"] = list(selected_groups)
+    missing = [key for key in ("ato_boundary", "source_collection", "accountable_owner") if not isinstance(required.get(key), str) or not required[key].strip()]
+    missing.extend(key for key in ("assessment_as_of", "reporting_profile") if not required.get(key))
+    authority = required["authority_register"]
+    if not isinstance(authority, Mapping) or not isinstance(authority.get("path"), str) or not authority["path"].strip() or not isinstance(authority.get("sha256"), str) or not re.fullmatch(r"[a-f0-9]{64}", authority["sha256"]) or not isinstance(authority.get("retrieved_at"), str):
+        missing.append("authority_register")
+    else:
+        try:
+            date.fromisoformat(authority["retrieved_at"])
+        except ValueError:
+            missing.append("authority_register")
+    freshness = {
+        "reviewed_at": supplied.get("freshness_reviewed_at"),
+        "reviewed_by": supplied.get("freshness_reviewed_by"),
+        "reference": supplied.get("freshness_review_reference"),
+        "sha256": supplied.get("freshness_review_sha256"),
+    }
+    if not isinstance(required["service_groups"], list) or not required["service_groups"] or not all(
+        isinstance(value, str) and value.strip() for value in required["service_groups"]
+    ) or len(set(required.get("service_groups") or [])) != len(required.get("service_groups") or []):
+        if "service_groups" not in missing:
+            missing.append("service_groups")
+    try:
+        parsed_as_of = datetime.fromisoformat(str(required["assessment_as_of"]).replace("Z", "+00:00"))
+        if parsed_as_of.tzinfo is None:
+            raise ValueError
+    except (TypeError, ValueError):
+        if "assessment_as_of" not in missing:
+            missing.append("assessment_as_of")
+        parsed_as_of = None
+    try:
+        reviewed_at = date.fromisoformat(str(freshness["reviewed_at"]))
+        retrieved_at = date.fromisoformat(str(authority.get("retrieved_at"))) if isinstance(authority, Mapping) else None
+        if not isinstance(freshness["reviewed_by"], str) or not freshness["reviewed_by"].strip() or not isinstance(freshness["reference"], str) or not freshness["reference"].strip() or not isinstance(freshness["sha256"], str) or not re.fullmatch(r"[a-f0-9]{64}", freshness["sha256"]) or retrieved_at is None or parsed_as_of is None or not (retrieved_at <= reviewed_at <= parsed_as_of.date()):
+            raise ValueError
+    except (TypeError, ValueError):
+        missing.append("authority_freshness_review")
+    required["authority_freshness_review"] = freshness
+    if required.get("reporting_profile") not in {"rev5-candidate", "20x-evaluation-preview", "dual-preview"}:
+        if "reporting_profile" not in missing:
+            missing.append("reporting_profile")
+    return required, missing
+
+
+def _contract_fingerprint(contract: Mapping[str, Any]) -> str:
+    return _digest("assessment-contract-v1", _canonical_json(contract))
+
+
 def _current_assessment_date() -> tuple[date, str]:
     requested = os.environ.get("CBOM_ASSESSMENT_TIMEZONE", "UTC").strip() or "UTC"
     try:
@@ -372,6 +486,44 @@ def _subject_for(
     return f"document:{digest}", f"Document {document['document_id']}"
 
 
+def _deployment_correlation(document: Mapping[str, Any], evidence: list[dict[str, Any]]) -> dict[str, str] | None:
+    """Accept only an explicit artifact-to-boundary correlation supplied in evidence."""
+    artifacts = _safe_list(document.get("artifacts"))
+    for row in evidence:
+        # Only a preserved primary/attestation record may assert deployment.
+        # Inventory properties and runtime probes are never self-attestations.
+        if row.get("evidence_kind") != "deployment_attestation" or not row.get("evidence_sha256"):
+            continue
+        correlation = (row.get("details") or {}).get("deployment_correlation")
+        if not isinstance(correlation, Mapping):
+            continue
+        canonical_key = str(correlation.get("artifact_canonical_key") or "")
+        artifact_digest = str(correlation.get("artifact_digest") or "")
+        boundary = str(correlation.get("crypto_boundary_identity") or "")
+        ato_boundary = str(correlation.get("ato_boundary") or "")
+        if not all((canonical_key, artifact_digest, boundary, ato_boundary, correlation.get("assigned_service_group"), correlation.get("module_identity"), correlation.get("module_version"), correlation.get("certificate_identifier"), correlation.get("verification_basis"), correlation.get("evidence_locator"))):
+            continue
+        matching = next((item for item in artifacts if str(item.get("canonical_key") or "") == canonical_key), None)
+        if not matching:
+            continue
+        normalized_digest = artifact_digest.split(":", 1)[-1]
+        catalog_digest = str(matching.get("digest") or "").split(":", 1)[-1]
+        if not matching.get("digest") or catalog_digest != normalized_digest:
+            continue
+        if not (document.get("document_sha256") or document.get("sha256")):
+            continue
+        return {
+            "artifact_key": artifact_digest or canonical_key, "artifact_canonical_key": canonical_key,
+            "crypto_boundary_identity": boundary, "ato_boundary": ato_boundary,
+            "module_identity": str(correlation["module_identity"]), "module_version": str(correlation["module_version"]),
+            "certificate_identifier": str(correlation["certificate_identifier"]),
+            "verification_basis": str(correlation["verification_basis"]),
+            "evidence_locator": str(correlation["evidence_locator"]),
+            "assigned_service_group": str(correlation["assigned_service_group"]),
+        }
+    return None
+
+
 def _make_finding(
     document: dict[str, Any],
     rule_id: str,
@@ -380,6 +532,12 @@ def _make_finding(
     rule = RULES[rule_id]
     public_evidence = _dedupe_evidence(evidence)
     subject_identity, subject_name = _subject_for(document, public_evidence)
+    deployment_correlation = _deployment_correlation(document, public_evidence)
+    if deployment_correlation:
+        subject_identity = "deployment:{}|boundary:{}".format(
+            deployment_correlation["artifact_key"], deployment_correlation["crypto_boundary_identity"]
+        )
+        subject_name = deployment_correlation["crypto_boundary_identity"]
     finding_key = _digest(
         POLICY_VERSION,
         rule_id,
@@ -424,6 +582,7 @@ def _make_finding(
             {"control_id": "SC-28(1)", "basis": "conditional-data-at-rest"},
         ],
         "limitations": list(LIMITATIONS),
+        "deployment_correlation": deployment_correlation,
         "requires_authorized_assessor_review": True,
     }
 
@@ -614,25 +773,42 @@ def _classify_document(
     return findings, aggregate
 
 
-def _build_poam_items(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _build_poam_items(
+    findings: list[dict[str, Any]], contract: Mapping[str, Any]
+) -> list[dict[str, Any]]:
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for finding in findings:
-        if not finding["poam_eligible"]:
+        if not finding["poam_eligible"] or finding.get("assertion_state") not in {
+            "confirmed_gap", "likely_gap", "validated_pending_review", "out_of_scope_candidate",
+        }:
             continue
-        source_collections = sorted(
-            {
-                str(scope.get("source_collection"))
-                for scope in finding["scopes"]
-                if scope.get("source_collection")
-            }
-        )
-        boundary_basis = "source-collections:" + ",".join(source_collections)
+        module_or_boundary = str(finding.get("subject_identity") or "")
+        correlation = finding.get("deployment_correlation") or {}
+        if correlation.get("ato_boundary") != contract.get("ato_boundary"):
+            continue
+        if not any(
+            row.get("source_collection") == contract.get("source_collection")
+            and row.get("service_group") == correlation.get("assigned_service_group")
+            for row in finding.get("scopes", [])
+        ):
+            continue
+        # A document-only or evidence-derived identity is insufficient to merge a POA&M.
+        if not module_or_boundary or module_or_boundary.startswith(("document:", "component-evidence:")):
+            continue
+        owner = str(contract.get("accountable_owner") or "")
+        boundary = str(contract.get("ato_boundary") or "")
+        remediation = str(finding.get("remediation") or "")
+        if not all((owner, boundary, remediation)):
+            continue
         poam_key = _digest(
-            "poam-v1",
+            "poam-v2",
+            POLICY_VERSION,
             finding["gap_code"],
-            finding["subject_identity"],
-            finding["remediation"],
-            boundary_basis,
+            _normalized(finding.get("gap_code")),
+            module_or_boundary,
+            remediation,
+            owner,
+            boundary,
         )
         groups[poam_key].append(finding)
 
@@ -640,16 +816,21 @@ def _build_poam_items(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for poam_key in sorted(groups):
         linked = groups[poam_key]
         first = linked[0]
-        scopes = [scope for finding in linked for scope in finding["scopes"]]
+        scopes = [
+            scope for finding in linked for scope in finding["scopes"]
+            if scope.get("source_collection") == contract.get("source_collection")
+            and scope.get("service_group") == (finding.get("deployment_correlation") or {}).get("assigned_service_group")
+        ]
         source_paths = sorted(
             {str(scope.get("source_path")) for scope in scopes if scope.get("source_path")}
         )
         source_hashes = sorted(
             {str(scope.get("source_sha256")) for scope in scopes if scope.get("source_sha256")}
         )
-        services = sorted(
-            {service for finding in linked for service in finding["affected_services"]}
-        )
+        services = sorted({
+            f"{scope.get('source_collection')}/{scope.get('service_group')}"
+            for scope in scopes if scope.get("source_collection") and scope.get("service_group")
+        })
         artifacts_by_identity: dict[str, dict[str, Any]] = {}
         for finding in linked:
             for artifact in finding["artifacts"]:
@@ -775,9 +956,9 @@ def _build_poam_items(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
         items.append(
             {
                 "poam_candidate_id": f"FIPS3-{poam_key[:12].upper()}",
-                "dedupe_key": poam_key,
+                "dedupe_key": f"sha256:{poam_key}",
                 "status": "Draft candidate — authorized review required",
-                "ato_boundary": "Unassigned — review required",
+                "ato_boundary": str(contract["ato_boundary"]),
                 "control_id": "SC-13",
                 "title": first["title"],
                 "weakness": first["weakness"],
@@ -787,11 +968,8 @@ def _build_poam_items(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "subject_identity": first["subject_identity"],
                 "subject_name": first["subject_name"],
                 "remediation_plan": first["remediation"],
-                "planned_milestone": (
-                    "By 2026-09-21: confirm deployed boundary, certificate/status, owner, "
-                    "vendor plan, and significant-change path."
-                ),
-                "responsible_owner": "Unassigned",
+                "planned_milestone": "Target date not supplied — authorized review required.",
+                "responsible_owner": str(contract["accountable_owner"]),
                 "original_detection_date": None,
                 "scheduled_completion_date": None,
                 "vendor_dependency": "Unknown — review required",
@@ -825,11 +1003,15 @@ def _build_poam_items(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "linked_finding_count": len(linked),
                 "rule_ids": sorted({finding["rule_id"] for finding in linked}),
                 "gap_codes": sorted({finding["gap_code"] for finding in linked}),
+                "assertion_state": first["assertion_state"],
+                "finding_type": {
+                    "legacy_140_2_transition": "legacy_module_transition",
+                    "runtime_fips_negative": "runtime_fips_not_enabled",
+                    "explicit_140_3_negative": "missing_cmvp_evidence",
+                }.get(first["gap_code"], "other"),
+                "deployment_correlation": first.get("deployment_correlation"),
                 "policy_version": POLICY_VERSION,
-                "dedupe_scope_basis": (
-                    "Provisional source-collection boundary; confirm the authoritative ATO "
-                    "boundary before accepting consolidation."
-                ),
+                "dedupe_scope_basis": "Root cause, cryptographic boundary/module, remediation, accountable owner, and ATO boundary are identical.",
                 "comments": (
                     "Candidate generated from normalized inventory evidence. Confirm ATO scope, "
                     "asset identifiers, risk rating, detection date, owner, milestones, and CMVP "
@@ -1042,7 +1224,7 @@ def _build_coverage_gap_observations(
                     },
                     "evidence": [
                         {
-                            "evidence_kind": "manual_attestation",
+                            "evidence_kind": "catalog_coverage",
                             "source_collection": source_collection,
                             "service_group": service_group,
                             "locator": f"catalog:service-group/{service}",
@@ -1083,16 +1265,135 @@ def _build_coverage_gap_observations(
     ]
 
 
+def _finding_observation(
+    finding: Mapping[str, Any], *, assessment_run_id: str, assessment_date: date,
+    contract: Mapping[str, Any], missing_contract_facts: list[str],
+) -> dict[str, Any] | None:
+    """Project a non-eligible classifier signal into the assessor schema."""
+    key = _digest("observation-v1", finding.get("finding_id"), assessment_run_id, *missing_contract_facts)
+    scopes = list(finding.get("scopes") or [])
+    first_scope = scopes[0] if scopes else {}
+    if not all(first_scope.get(key) for key in ("source_collection", "service_group")):
+        # Keep an internal finding diagnostic, but do not fabricate a schema observation.
+        return None
+    has_source_fingerprint = all(first_scope.get(key) for key in ("source_collection", "service_group", "source_path", "source_sha256"))
+    if not has_source_fingerprint:
+        # The classifier finding remains visible, but it cannot be projected as
+        # schema evidence without inventing a human attestation or fingerprint.
+        return None
+    evidence = [{
+        "evidence_kind": "source_fingerprint",
+        "source_collection": first_scope.get("source_collection"),
+        "service_group": first_scope.get("service_group"),
+        "source_path": first_scope.get("source_path"),
+        "source_sha256": first_scope.get("source_sha256"),
+        "document_id": finding.get("document_id"),
+        "payload_sha256": finding.get("document_sha256"),
+        "locator": f"catalog:finding/{finding.get('finding_id')}",
+        "claim_supported": "A normalized catalog signal requires an assessment contract and authoritative review before POA&M eligibility.",
+        "evidence_grade": "inventory",
+        "limitations": list(LIMITATIONS),
+    }]
+    return {
+        "schema_version": "1.0", "observation_id": f"OBS-FIPS3-{key[:12].upper()}",
+        "output_type": "analyst_observation", "assertion_state": "evidence_gap",
+        "poam_eligibility": False, "title": str(finding.get("title") or "Assessment contract incomplete"),
+        "technical_observation": str(finding.get("weakness") or "A catalog signal could not be assessed."),
+        "scope": {"source_collection": first_scope["source_collection"], "service_groups": [first_scope["service_group"]], "ato_boundary": contract.get("ato_boundary")},
+        "evidence": evidence,
+        "missing_required_facts": missing_contract_facts or ["Resolved cryptographic-boundary correlation"],
+        "conflict_summary": "Unresolved correlation is retained for review." if finding.get("assertion_state") == "evidence_gap" else None,
+        "limitations": list(LIMITATIONS), "assessment_run_id": assessment_run_id,
+        "created_at": f"{assessment_date.isoformat()}T00:00:00+00:00",
+        "review": {"requires_authorized_assessor_review": True, "requires_ao_review": True, "requires_system_owner_attestation": True},
+    }
+
+
+def _candidate_record(
+    item: Mapping[str, Any], *, assessment_run_id: str, assessment_date: date,
+    contract: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Create the strict candidate schema projection without changing UI compatibility fields."""
+    scope_links = list(item.get("service_scope_links") or [])
+    affected = [{
+        "source_collection": link.get("source_collection"), "service_group": link.get("service_group"),
+        "source_path": link.get("source_path"), "artifact_key": item.get("subject_identity"),
+        "impact_status": "unresolved",
+    } for link in scope_links]
+    evidence = [{
+        "evidence_kind": "source_fingerprint", "source_collection": link.get("source_collection"),
+        "service_group": link.get("service_group"), "source_path": link.get("source_path"),
+        "source_sha256": link.get("source_sha256"), "document_id": link.get("document_id"),
+        "payload_sha256": link.get("document_sha256"), "locator": f"catalog:document/{link.get('document_id')}",
+        "claim_supported": "Normalized catalog evidence supporting a candidate assessment signal.",
+        "evidence_grade": "inventory", "limitations": list(LIMITATIONS),
+    } for link in scope_links]
+    correlation = item.get("deployment_correlation") or {}
+    artifacts = [{"canonical_key": correlation["artifact_canonical_key"], "name": correlation["crypto_boundary_identity"], "digest": correlation["artifact_key"], "deployment_linkage": "confirmed"}]
+    matching_scope = next((link for link in scope_links if link.get("service_group") == correlation.get("assigned_service_group")), {})
+    evidence = [{
+        "evidence_kind": "deployment_attestation", "source_collection": matching_scope.get("source_collection"),
+        "service_group": matching_scope.get("service_group"), "source_path": matching_scope.get("source_path"),
+        "source_sha256": matching_scope.get("source_sha256"), "document_id": matching_scope.get("document_id"),
+        "payload_sha256": matching_scope.get("document_sha256"), "locator": correlation.get("evidence_locator"),
+        "artifact_canonical_key": correlation.get("artifact_canonical_key"), "artifact_digest": correlation.get("artifact_key"),
+        "crypto_boundary_identity": correlation.get("crypto_boundary_identity"), "module_identity": correlation.get("module_identity"),
+        "module_version": correlation.get("module_version"), "certificate_identifier": correlation.get("certificate_identifier"),
+        "ato_boundary": correlation.get("ato_boundary"), "verification_basis": correlation.get("verification_basis"),
+        "claim_supported": "Primary deployment attestation correlates the immutable artifact to the stated cryptographic boundary and ATO scope; it does not establish compliance.",
+        "evidence_grade": "primary", "limitations": list(LIMITATIONS),
+    }]
+    return {
+        "schema_version": "1.0", "poam_candidate_id": item["poam_candidate_id"], "dedupe_key": item["dedupe_key"],
+        "status": "candidate", "assertion_state": item["assertion_state"], "finding_type": item["finding_type"],
+        "title": item["title"], "technical_condition": item["weakness"], "risk_rationale": item["risk_rationale"],
+        "control_mapping": [{"control_id": "SC-13", "mapping_basis": "analyst-proposed", "confidence": "low"}],
+        "scope": {"ato_boundary": contract["ato_boundary"], "source_collection": contract["source_collection"], "service_groups": [correlation["assigned_service_group"]], "artifacts": artifacts},
+        "affected_services": affected, "root_cause": item["weakness"],
+        "remediation": {"recommended_action": item["remediation_plan"], "validation_criteria": ["Confirm deployed module, CMVP certificate, boundary, environment, and approved-mode evidence."], "milestones": [{"name": "Authorized review", "target_date": None}], "owner": contract["accountable_owner"]},
+        "evidence": evidence, "evidence_gaps": ["Authorized assessor/AO review remains required."], "limitations": list(LIMITATIONS),
+        "review": {"requires_authorized_assessor_review": True, "requires_ao_review": True, "requires_system_owner_attestation": True},
+        "assessment_run_id": assessment_run_id, "created_at": f"{assessment_date.isoformat()}T00:00:00+00:00",
+    }
+
+
 def build_assessment(
     documents: list[dict[str, Any]],
     observations: list[dict[str, Any]],
     *,
     as_of: date | None = None,
-    scope: dict[str, str | None] | None = None,
+    scope: dict[str, str | list[str] | None] | None = None,
     service_group_inventory: list[dict[str, Any]] | None = None,
+    contract: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     current_date, assessment_timezone = _current_assessment_date()
     assessment_date = as_of or current_date
+    executed_at = datetime.now(ZoneInfo("UTC")).isoformat()
+    assessment_contract, missing_contract_facts = _assessment_contract(
+        contract, scope=scope, assessment_date=assessment_date
+    )
+    if not missing_contract_facts:
+        assessment_date = datetime.fromisoformat(
+            str(assessment_contract["assessment_as_of"]).replace("Z", "+00:00")
+        ).date()
+    if not missing_contract_facts:
+        allowed_collection = assessment_contract["source_collection"]
+        allowed_groups = set(assessment_contract["service_groups"])
+        bounded_documents = []
+        for document in documents:
+            bounded_scopes = [
+                row for row in _safe_list(document.get("scopes"))
+                if row.get("source_collection") == allowed_collection
+                and row.get("service_group") in allowed_groups
+            ]
+            if bounded_scopes:
+                bounded_documents.append({**document, "scopes": bounded_scopes})
+        documents = bounded_documents
+        service_group_inventory = [
+            row for row in (service_group_inventory or [])
+            if row.get("source_collection") == allowed_collection
+            and (row.get("service_group") or row.get("slug")) in allowed_groups
+        ]
     observations_by_document: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for observation in observations:
         observations_by_document[int(observation["document_id"])].append(observation)
@@ -1108,7 +1409,30 @@ def build_assessment(
         signal_by_document[document_id] = signals
 
     findings = _dedupe_findings(findings)
-    poam_items = _build_poam_items(findings)
+    if not missing_contract_facts:
+        contract_as_of = date.fromisoformat(str(assessment_contract["assessment_as_of"]).replace("Z", "+00:00").split("T", 1)[0])
+        for finding in findings:
+            correlation = finding.get("deployment_correlation")
+            in_contract_group = any(
+                row.get("source_collection") == assessment_contract["source_collection"]
+                and row.get("service_group") in assessment_contract["service_groups"]
+                and correlation is not None
+                and row.get("service_group") == correlation.get("assigned_service_group")
+                for row in _safe_list(finding.get("scopes"))
+            )
+            transition_not_effective = finding.get("rule_id") == "FIPS1403-001" and contract_as_of < HISTORICAL_EFFECTIVE_DATE
+            if transition_not_effective or not correlation or correlation.get("ato_boundary") != assessment_contract["ato_boundary"] or not in_contract_group:
+                finding["poam_eligible"] = False
+                finding["assertion_state"] = "evidence_gap"
+                finding["missing_required_facts"] = [
+                    "Explicit deployed artifact, cryptographic-boundary, module/version, certificate, and ATO correlation evidence"
+                ]
+    if missing_contract_facts:
+        # Gate before all rollups so dashboards and service detail cannot retain
+        # candidate-finding counts derived from an incomplete assessment.
+        for finding in findings:
+            finding["poam_eligible"] = False
+            finding["contract_gate"] = "not_eligible"
 
     service_rollups: dict[str, dict[str, Any]] = {}
     for inventory_row in service_group_inventory or []:
@@ -1187,12 +1511,17 @@ def build_assessment(
         )
     )
 
+    source_fingerprints = sorted({
+        str(scope_row.get("source_sha256"))
+        for document in documents for scope_row in _safe_list(document.get("scopes"))
+        if scope_row.get("source_sha256")
+    })
+    document_ids = sorted(int(document["document_id"]) for document in documents)
+    external_record_ids = sorted({int(row["evidence_id"]) for row in observations if row.get("evidence_kind") == "fips_tool_result" and row.get("evidence_id") is not None})
+    authority = assessment_contract.get("authority_register") if isinstance(assessment_contract.get("authority_register"), Mapping) else {}
     assessment_run_id = "ASSESS-FIPS3-" + _digest(
-        POLICY_VERSION,
-        assessment_date.isoformat(),
-        (scope or {}).get("source_collection"),
-        (scope or {}).get("service_group"),
-        *(rollup["service"] for rollup in rollups),
+        "assessment-run-v2", POLICY_VERSION, _contract_fingerprint(assessment_contract),
+        _canonical_json(source_fingerprints), _canonical_json(document_ids), _canonical_json(external_record_ids),
     )[:12].upper()
     coverage_gaps = _build_coverage_gap_observations(
         rollups,
@@ -1200,13 +1529,54 @@ def build_assessment(
         assessment_run_id=assessment_run_id,
     )
 
+    poam_items = _build_poam_items(findings, assessment_contract) if not missing_contract_facts else []
+    for item in poam_items:
+        item["assessment_run_id"] = assessment_run_id
+    candidate_records = [
+        _candidate_record(item, assessment_run_id=assessment_run_id, assessment_date=assessment_date, contract=assessment_contract)
+        for item in poam_items
+    ]
+    analyst_observations = list(coverage_gaps)
+    if missing_contract_facts or any(not finding["poam_eligible"] for finding in findings):
+        analyst_observations.extend(row for row in (
+            _finding_observation(
+                finding, assessment_run_id=assessment_run_id, assessment_date=assessment_date,
+                contract=assessment_contract,
+                missing_contract_facts=missing_contract_facts or list(finding.get("missing_required_facts") or ["Evidence correlation"]),
+            ) for finding in findings if not finding["poam_eligible"]
+        ) if row is not None)
     eligible = [finding for finding in findings if finding["poam_eligible"]]
     review = [finding for finding in findings if not finding["poam_eligible"]]
     evidence_documents = sum(
         1 for signals in signal_by_document.values() if signals["has_fips_evidence"]
     )
+    run_manifest = None if missing_contract_facts else {
+        "schema_version": "1.1", "assessment_run_id": assessment_run_id,
+        "executed_at": executed_at,
+        "assessment_as_of": assessment_contract["assessment_as_of"],
+        "assessor_identity": "cbom-catalog-deterministic-engine", "status": "candidate",
+        "scope": {"ato_boundary": assessment_contract["ato_boundary"], "source_collection": assessment_contract["source_collection"], "service_groups": list(assessment_contract["service_groups"])},
+        "rules_version": POLICY_VERSION,
+        "authority_register": {"path": authority["path"], "sha256": authority["sha256"], "retrieved_at": authority["retrieved_at"]},
+        "authority_freshness_review": assessment_contract["authority_freshness_review"],
+        "catalog_evidence": {"source_fingerprints": source_fingerprints, "document_ids": document_ids, "external_record_ids": external_record_ids},
+        "assumptions": ["No ownership, ATO boundary, or deployment fact is inferred from catalog paths or tags."], "limitations": list(LIMITATIONS),
+    }
     return {
         "assessment_run_id": assessment_run_id,
+        "assessment_run": run_manifest,
+        "assessment_run_eligibility": not missing_contract_facts,
+        "assessment_contract": {
+            "complete": not missing_contract_facts, "missing_required_facts": missing_contract_facts,
+            "fingerprint": _contract_fingerprint(assessment_contract), "reporting_profile": assessment_contract.get("reporting_profile"),
+            "authority_register_path": authority.get("path"), "authority_register_sha256": authority.get("sha256"),
+            "authority_retrieved_on": authority.get("retrieved_at"),
+            # This is a bounded review of the pinned authority register for the
+            # assessment's as-of date. It is not an authorization or a claim
+            # that the authority remains current after that date.
+            "authority_freshness_review": assessment_contract.get("authority_freshness_review"),
+            "authority_freshness_state": "reviewed_for_assessment" if "authority_freshness_review" not in missing_contract_facts else "incomplete",
+        },
         "policy": {
             "policy_version": POLICY_VERSION,
             "assessor_version": ASSESSOR_VERSION,
@@ -1230,7 +1600,7 @@ def build_assessment(
             "candidate_gap_findings": len(eligible),
             "needs_review_findings": len(review),
             "coverage_gap_observations": len(coverage_gaps),
-            "needs_review_observations": len(review) + len(coverage_gaps),
+            "needs_review_observations": len(analyst_observations),
             "not_assessable_service_groups": sum(
                 1 for row in coverage_gaps if row["assertion_state"] == "not_assessable"
             ),
@@ -1250,10 +1620,17 @@ def build_assessment(
                 {service for finding in findings for service in finding["affected_services"]}
             ),
         },
+        "summary_metric_metadata": SUMMARY_METRIC_METADATA,
+        "coverage_metric_metadata": {
+            "documents_with_fips_evidence": SUMMARY_METRIC_METADATA["documents_with_fips_evidence"],
+            "documents_without_fips_evidence": SUMMARY_METRIC_METADATA["documents_without_fips_evidence"],
+        },
         "service_groups": rollups,
         "coverage_gaps": coverage_gaps,
+        "analyst_observations": analyst_observations,
         "findings": findings,
         "poam_items": poam_items,
+        "poam_candidate_records": candidate_records,
         "limitations": list(LIMITATIONS),
         "disclaimer": (
             "Decision-support output only. These are candidate findings and draft POA&M rows, "
@@ -1290,6 +1667,11 @@ POAM_CSV_FIELDS = [
     "Rule Version",
     "Comments",
     "Assessor Review Required",
+    "Assessment Run ID",
+    "Assertion State",
+    "Dedupe Key",
+    "Evidence Gaps",
+    "Review Gates",
 ]
 
 
@@ -1343,6 +1725,11 @@ def render_poam_csv(items: list[dict[str, Any]]) -> str:
                 "Rule Version": item["policy_version"],
                 "Comments": item["comments"],
                 "Assessor Review Required": "Yes",
+                "Assessment Run ID": item.get("assessment_run_id", ""),
+                "Assertion State": item.get("assertion_state", ""),
+                "Dedupe Key": item.get("dedupe_key", ""),
+                "Evidence Gaps": "Authorized assessor/AO and system-owner review remain required.",
+                "Review Gates": "authorized assessor; AO; system owner",
             }
         )
     return output.getvalue()

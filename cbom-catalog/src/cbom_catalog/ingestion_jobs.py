@@ -21,8 +21,9 @@ from .api_database import connection as api_connection
 from .classify import EXCLUDED_DIRECTORY_NAMES, SUPPORTED_SUFFIXES, media_type_for
 from .inventory import build_inventory
 from .repository import connect, ingest_root, stats_as_dict
+from .product_scopes import ProductScopeError, normalize_product_scope_ids
 
-MANIFEST_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 2
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 COLLECTION_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$")
 TERMINAL_STATES = frozenset({"succeeded", "failed", "expired"})
@@ -111,6 +112,7 @@ def normalize_manifest(
     source_collection: str,
     dry_run: bool,
     authoritative_snapshot: bool,
+    product_scope_ids: Iterable[object] | None = None,
     files: Iterable[dict[str, Any]],
 ) -> dict[str, Any]:
     collection = source_collection.strip().casefold()
@@ -128,6 +130,10 @@ def normalize_manifest(
     max_total_bytes = _positive_int_setting(
         "CBOM_INGEST_MAX_TOTAL_BYTES", 20 * 1024 * 1024 * 1024, 100 * 1024 * 1024 * 1024
     )
+    try:
+        normalized_product_scope_ids = normalize_product_scope_ids(product_scope_ids)
+    except ProductScopeError as error:
+        raise IngestionManifestError(str(error)) from error
     normalized_files: list[dict[str, Any]] = []
     seen_paths: set[str] = set()
     total_bytes = 0
@@ -168,6 +174,7 @@ def normalize_manifest(
         "source_collection": collection,
         "dry_run": bool(dry_run),
         "authoritative_snapshot": bool(authoritative_snapshot),
+        "product_scope_ids": normalized_product_scope_ids,
         "files": normalized_files,
     }
 
@@ -275,9 +282,9 @@ def create_ingestion_batch(
                     id, source_collection, manifest_sha256, manifest_version,
                     dry_run, authoritative_snapshot, state, expected_file_count,
                     expected_total_bytes, upload_prefix, upload_expires_at,
-                    created_by_user_id, created_by_credential_id
+                    created_by_user_id, created_by_credential_id, product_scope_ids
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, 'uploading', %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, 'uploading', %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
                 (
@@ -293,6 +300,7 @@ def create_ingestion_batch(
                     expires_at,
                     actor_user_id,
                     actor_credential_id,
+                    manifest["product_scope_ids"],
                 ),
             ).fetchone()
             with database.cursor() as cursor:
@@ -336,6 +344,7 @@ def create_ingestion_batch(
                             "manifest_sha256": calculated_manifest_sha256,
                             "dry_run": manifest["dry_run"],
                             "authoritative_snapshot": manifest["authoritative_snapshot"],
+                            "product_scope_ids": manifest["product_scope_ids"],
                             "expected_file_count": len(manifest["files"]),
                             "expected_total_bytes": sum(
                                 item["size_bytes"] for item in manifest["files"]
@@ -599,6 +608,7 @@ def _mark_batch_failed(
     message: str,
     *,
     database_url: str | None = None,
+    partial_result: dict[str, Any] | None = None,
 ) -> None:
     summary = message[:2_000]
     with connect(database_url) as database:
@@ -607,9 +617,10 @@ def _mark_batch_failed(
                 """
                 UPDATE app_auth.ingestion_batch
                 SET state = 'failed', error_summary = %s, completed_at = now()
+                    , result = coalesce(%s, result)
                 WHERE id = %s AND state NOT IN ('succeeded', 'failed', 'expired')
                 """,
-                (summary, batch_id),
+                (summary, Jsonb(partial_result) if partial_result is not None else None, batch_id),
             )
 
 
@@ -720,6 +731,58 @@ def _dry_run_comparison(
     }
 
 
+def _attribute_committed_batch_evidence(
+    database: Any,
+    *,
+    batch_id: str,
+    source_collection: str,
+    product_scope_ids: list[str] | None,
+    objects: list[dict[str, Any]],
+) -> int:
+    """Bind committed, verified source checksums to the uploader's product choice.
+
+    The join includes collection, resolved service group, path, and SHA-256.
+    A later upload at the same path with a different checksum cannot inherit the
+    prior routing choice.  NULL is a legacy batch and deliberately has no
+    attribution effect.
+    """
+    if not product_scope_ids:
+        return 0
+    decisions = 0
+    for item in objects:
+        row = database.execute(
+            """
+            SELECT sf.source_collection_id, sf.service_group_id, sf.source_path,
+                   sf.content_sha256
+            FROM source_file sf
+            JOIN source_collection sc ON sc.id = sf.source_collection_id
+            WHERE sc.slug = %s AND sf.source_path = %s
+              AND sf.content_sha256 = %s AND sf.is_present
+            """,
+            (source_collection, item["relative_path"], item["sha256"]),
+        ).fetchone()
+        if row is None:
+            raise IngestionValidationError(
+                f"Committed source file does not match verified manifest: {item['relative_path']}"
+            )
+        database.execute(
+            """
+            INSERT INTO app_auth.evidence_product_scope_decision (
+                source_collection_id, service_group_id, source_path,
+                source_sha256, product_scope_ids, decision_basis,
+                decision_reference, attributed_by_batch_id
+            )
+            VALUES (%s, %s, %s, %s, %s, 'uploader selection', 'manifest v2 selection', %s)
+            """,
+            (
+                row["source_collection_id"], row["service_group_id"], row["source_path"],
+                row["content_sha256"], product_scope_ids, batch_id,
+            ),
+        )
+        decisions += 1
+    return decisions
+
+
 def execute_ingestion_batch(
     batch_id: str,
     *,
@@ -727,6 +790,7 @@ def execute_ingestion_batch(
     s3_client: Any = None,
 ) -> dict[str, Any]:
     claimed = False
+    committed_ingest_run_id: int | None = None
     try:
         with connect(database_url) as database:
             batch, objects = _claim_batch(database, batch_id)
@@ -834,6 +898,20 @@ def execute_ingestion_batch(
                         "ingest": stats_as_dict(stats),
                     }
                     ingest_run_id = stats.run_id
+                    committed_ingest_run_id = ingest_run_id
+                    with database.transaction():
+                        attributed = _attribute_committed_batch_evidence(
+                            database,
+                            batch_id=batch_id,
+                            source_collection=batch["source_collection"],
+                            product_scope_ids=batch.get("product_scope_ids"),
+                            objects=objects,
+                        )
+                    result["product_scope_attribution"] = {
+                        "product_scope_ids": batch.get("product_scope_ids") or [],
+                        "attribution_decisions": attributed,
+                        "decision_basis": "uploader selection",
+                    }
                     print(
                         f"Ingestion batch {batch_id}: catalog ingest run {ingest_run_id} completed",
                         flush=True,
@@ -853,7 +931,20 @@ def execute_ingestion_batch(
                 return result
     except Exception as error:
         if claimed:
-            _mark_batch_failed(batch_id, str(error), database_url=database_url)
+            partial_result = None
+            if committed_ingest_run_id is not None:
+                partial_result = {
+                    "catalog_changes_applied": True,
+                    "ingest_run_id": committed_ingest_run_id,
+                    "product_scope_attribution": {
+                        "state": "failed_after_catalog_commit",
+                        "message": "Catalog ingest committed; exact-SHA product attribution did not complete.",
+                    },
+                }
+            _mark_batch_failed(
+                batch_id, str(error), database_url=database_url,
+                partial_result=partial_result,
+            )
         print(
             f"Ingestion batch {batch_id}: failed with {type(error).__name__}: {str(error)[:500]}",
             flush=True,

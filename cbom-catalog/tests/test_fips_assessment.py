@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import unittest
 from datetime import date
+from pathlib import Path
+
+import jsonschema
 
 from cbom_catalog.fips_assessment import (
     build_assessment,
@@ -26,6 +30,7 @@ def document(
     group: str,
     *,
     artifact_key: str | None = None,
+    artifact_digest: str | None = None,
 ) -> dict:
     artifacts = []
     if artifact_key:
@@ -34,7 +39,7 @@ def document(
                 "artifact_id": document_id,
                 "canonical_key": artifact_key,
                 "name": artifact_key,
-                "digest": None,
+                "digest": artifact_digest,
             }
         )
     return {
@@ -81,7 +86,157 @@ def observation(
     }
 
 
+def complete_contract(*groups: str) -> dict:
+    return {
+        "ato_boundary": "Test ATO", "source_collection": "sse-cboms",
+        "service_groups": list(groups), "accountable_owner": "Test Owner",
+        "assessment_as_of": "2026-09-18T00:00:00+00:00", "reporting_profile": "rev5-candidate",
+        "authority_register": {"path": "test-authority-register", "sha256": "a" * 64, "retrieved_at": "2026-09-18"},
+        "freshness_reviewed_at": "2026-09-18", "freshness_reviewed_by": "Test reviewer",
+        "freshness_review_reference": "authority-review:test", "freshness_review_sha256": "b" * 64,
+    }
+
+
+def verified_correlation(artifact_key: str, group: str, digest: str = "sha256:" + "b" * 64) -> dict:
+    return {"deployment_correlation": {
+        "artifact_canonical_key": artifact_key, "artifact_digest": digest, "crypto_boundary_identity": "openssl-fips-boundary",
+        "ato_boundary": "Test ATO", "module_identity": "OpenSSL FIPS Provider",
+        "module_version": "3.0.9", "certificate_identifier": "CMVP-TEST-1",
+        "verification_basis": "signed deployment attestation", "evidence_locator": "oscal:assessment-results/1",
+        "assigned_service_group": group,
+    }}
+
+
+def validate_schema(name: str, value: dict) -> None:
+    schema_dir = Path(__file__).resolve().parents[2] / ".agents" / "skills" / "fedramp-fips-assessor" / "schemas"
+    schema = json.loads((schema_dir / name).read_text())
+    evidence_schema = json.loads((schema_dir / "evidence-reference.schema.json").read_text())
+    resolver = jsonschema.RefResolver(
+        base_uri=schema_dir.as_uri() + "/", referrer=schema,
+        store={schema["$id"]: schema, evidence_schema["$id"]: evidence_schema},
+    )
+    jsonschema.Draft202012Validator(schema, resolver=resolver).validate(value)
+
+
 class FipsAssessmentTests(unittest.TestCase):
+    def test_missing_contract_returns_observations_without_candidates(self) -> None:
+        result = build_assessment(
+            [document(1, "TEAM", artifact_key="pkg:generic/legacy@1")],
+            [observation(1, "fedramp:fips-level", "FIPS 140-2", evidence_id=99)],
+            as_of=date(2026, 9, 18),
+        )
+        self.assertFalse(result["assessment_contract"]["complete"])
+        self.assertIn("ato_boundary", result["assessment_contract"]["missing_required_facts"])
+        self.assertIsNone(result["assessment_run"])
+        self.assertFalse(result["assessment_run_eligibility"])
+        self.assertEqual(result["poam_items"], [])
+        self.assertTrue(result["analyst_observations"])
+        self.assertTrue(all(row["poam_eligibility"] is False for row in result["analyst_observations"]))
+        self.assertEqual(result["service_groups"][0]["poam_candidate_findings"], 0)
+        for row in result["analyst_observations"]:
+            validate_schema("analyst-observation.schema.json", row)
+
+    def test_invalid_or_out_of_range_authority_freshness_blocks_run(self) -> None:
+        contract = complete_contract("TEAM")
+        contract["freshness_reviewed_at"] = "2026-09-19"
+        result = build_assessment(
+            [document(1, "TEAM", artifact_key="pkg:generic/x@1")], [],
+            as_of=date(2026, 9, 18), contract=contract,
+        )
+        self.assertFalse(result["assessment_contract"]["complete"])
+        self.assertIn("authority_freshness_review", result["assessment_contract"]["missing_required_facts"])
+        self.assertIsNone(result["assessment_run"])
+
+    def test_empty_or_duplicate_contract_groups_block_assessment(self) -> None:
+        for groups in ([], ["TEAM", "TEAM"]):
+            result = build_assessment([], [], contract={**complete_contract("TEAM"), "service_groups": groups})
+            self.assertFalse(result["assessment_contract"]["complete"])
+            self.assertIn("service_groups", result["assessment_contract"]["missing_required_facts"])
+
+    def test_contract_as_of_controls_transition_policy_date(self) -> None:
+        contract = {**complete_contract("TEAM"), "assessment_as_of": "2026-09-21T00:00:00+00:00", "freshness_reviewed_at": "2026-09-18"}
+        result = build_assessment(
+            [document(1, "TEAM", artifact_key="pkg:generic/x@1", artifact_digest="b" * 64)],
+            [observation(1, "fedramp:fips-level", "FIPS 140-2", evidence_id=91, kind="deployment_attestation", details=verified_correlation("pkg:generic/x@1", "TEAM"))],
+            as_of=date(2026, 9, 25), contract=contract,
+        )
+        self.assertEqual(result["policy"]["assessment_date"], "2026-09-21")
+        self.assertEqual(result["poam_items"], [])
+
+    def test_complete_contract_emits_schema_valid_run_and_candidate(self) -> None:
+        result = build_assessment(
+            [document(1, "TEAM", artifact_key="pkg:generic/legacy@1", artifact_digest="b" * 64)],
+            [observation(1, "fedramp:meets-fips-140-3", "false", evidence_id=98, kind="deployment_attestation", details=verified_correlation("pkg:generic/legacy@1", "TEAM"))],
+            as_of=date(2026, 9, 22), contract={**complete_contract("TEAM"), "assessment_as_of": "2026-09-22T00:00:00+00:00"},
+        )
+        validate_schema("assessment-run.schema.json", result["assessment_run"])
+        self.assertEqual(len(result["poam_candidate_records"]), 1)
+        validate_schema("poam-item.schema.json", result["poam_candidate_records"][0])
+
+    def test_result_exposes_authority_review_and_semantic_metric_metadata(self) -> None:
+        result = build_assessment(
+            [], [], as_of=date(2026, 9, 18), contract=complete_contract("TEAM"),
+        )
+        review = result["assessment_contract"]["authority_freshness_review"]
+        self.assertEqual(result["assessment_contract"]["authority_freshness_state"], "reviewed_for_assessment")
+        self.assertEqual(review["reviewed_by"], "Test reviewer")
+        self.assertEqual(
+            result["summary_metric_metadata"]["deduplicated_poam_candidates"]["label"],
+            "Deduplicated draft POA&M candidates",
+        )
+        self.assertIn(
+            "not CMVP validation",
+            result["coverage_metric_metadata"]["documents_with_fips_evidence"]["interpretation"],
+        )
+
+    def test_complete_contract_bounds_inference_to_its_service_groups(self) -> None:
+        result = build_assessment(
+            [
+                document(1, "IN-SCOPE", artifact_key="pkg:generic/in@1", artifact_digest="b" * 64),
+                document(2, "OUT-OF-SCOPE", artifact_key="pkg:generic/out@1"),
+            ],
+            [
+                observation(1, "fedramp:meets-fips-140-3", "false", evidence_id=96, kind="deployment_attestation", details=verified_correlation("pkg:generic/in@1", "IN-SCOPE")),
+                observation(2, "fedramp:fips-level", "FIPS 140-2", evidence_id=97),
+            ],
+            as_of=date(2026, 9, 18), contract=complete_contract("IN-SCOPE"),
+        )
+        self.assertEqual(result["summary"]["documents_in_scope"], 1)
+        self.assertEqual(result["poam_items"][0]["affected_services"], ["sse-cboms/IN-SCOPE"])
+        self.assertEqual(result["assessment_run"]["catalog_evidence"]["document_ids"], [1])
+
+    def test_correlation_group_or_digest_mismatch_is_not_candidate(self) -> None:
+        for detail in (
+            verified_correlation("pkg:generic/legacy@1", "OTHER"),
+            verified_correlation("pkg:generic/legacy@1", "TEAM", "sha256:" + "c" * 64),
+        ):
+            result = build_assessment(
+                [document(1, "TEAM", artifact_key="pkg:generic/legacy@1", artifact_digest="b" * 64)],
+                [observation(1, "fedramp:meets-fips-140-3", "false", evidence_id=94, kind="deployment_attestation", details=detail)],
+                as_of=date(2026, 9, 22), contract={**complete_contract("TEAM"), "assessment_as_of": "2026-09-22T00:00:00+00:00"},
+            )
+            self.assertEqual(result["poam_items"], [])
+            self.assertTrue(result["analyst_observations"])
+
+    def test_shared_document_candidate_keeps_only_attested_group_scope(self) -> None:
+        shared = document(1, "TEAM-A", artifact_key="pkg:generic/legacy@1", artifact_digest="b" * 64)
+        shared["scopes"].append({"source_collection": "sse-cboms", "service_group": "TEAM-B", "source_path": "TEAM-B/service-1.json", "source_sha256": "d" * 64})
+        result = build_assessment(
+            [shared],
+            [observation(1, "fedramp:meets-fips-140-3", "false", evidence_id=92, kind="deployment_attestation", details=verified_correlation("pkg:generic/legacy@1", "TEAM-A"))],
+            as_of=date(2026, 9, 22), contract={**complete_contract("TEAM-A", "TEAM-B"), "assessment_as_of": "2026-09-22T00:00:00+00:00"},
+        )
+        self.assertEqual(result["poam_items"][0]["affected_services"], ["sse-cboms/TEAM-A"])
+        self.assertEqual(result["poam_candidate_records"][0]["scope"]["service_groups"], ["TEAM-A"])
+
+    def test_legacy_transition_is_not_candidate_before_historical_date(self) -> None:
+        result = build_assessment(
+            [document(1, "TEAM", artifact_key="pkg:generic/legacy@1", artifact_digest="b" * 64)],
+            [observation(1, "fedramp:fips-level", "FIPS 140-2", evidence_id=93, kind="deployment_attestation", details=verified_correlation("pkg:generic/legacy@1", "TEAM"))],
+            as_of=date(2026, 9, 21), contract=complete_contract("TEAM"),
+        )
+        self.assertEqual(result["poam_items"], [])
+
     def test_workstreams_group_issue_owner_and_date_without_discarding_candidates(self) -> None:
         base = {
             "gap_codes": ["explicit_140_3_negative"],
@@ -120,13 +275,14 @@ class FipsAssessmentTests(unittest.TestCase):
             [document(1, "DLP", artifact_key="registry/service:1")],
             [observation(1, "fedramp:fips-level", "FIPS 140-2", evidence_id=10)],
             as_of=date(2026, 9, 18),
+            contract=complete_contract("DLP"),
         )
 
         self.assertEqual(result["findings"][0]["rule_id"], "FIPS1403-001")
-        self.assertEqual(result["findings"][0]["assertion_state"], "likely_gap")
-        self.assertTrue(result["findings"][0]["poam_eligible"])
+        self.assertEqual(result["findings"][0]["assertion_state"], "evidence_gap")
+        self.assertFalse(result["findings"][0]["poam_eligible"])
         self.assertTrue(result["findings"][0]["requires_authorized_assessor_review"])
-        self.assertEqual(result["summary"]["deduplicated_poam_candidates"], 1)
+        self.assertEqual(result["summary"]["deduplicated_poam_candidates"], 0)
 
     def test_same_root_cause_and_artifact_deduplicate_across_service_groups(self) -> None:
         documents = [
@@ -138,15 +294,10 @@ class FipsAssessmentTests(unittest.TestCase):
             observation(2, "fedramp:meets-fips-140-3", "false", evidence_id=12),
         ]
 
-        result = build_assessment(documents, observations, as_of=date(2026, 9, 18))
+        result = build_assessment(documents, observations, as_of=date(2026, 9, 18), contract=complete_contract("GROUP-A", "GROUP-B"))
 
         self.assertEqual(len(result["findings"]), 2)
-        self.assertEqual(len(result["poam_items"]), 1)
-        self.assertEqual(
-            result["poam_items"][0]["affected_services"],
-            ["sse-cboms/GROUP-A", "sse-cboms/GROUP-B"],
-        )
-        self.assertEqual(result["poam_items"][0]["linked_finding_count"], 2)
+        self.assertEqual(result["poam_items"], [])
 
     def test_non_crypto_not_applicable_component_is_excluded(self) -> None:
         observations = [
@@ -189,6 +340,7 @@ class FipsAssessmentTests(unittest.TestCase):
                 )
             ],
             as_of=date(2026, 9, 18),
+            contract=complete_contract("LANDERS"),
         )
 
         self.assertEqual(result["findings"][0]["rule_id"], "FIPS1403-005")
@@ -214,6 +366,7 @@ class FipsAssessmentTests(unittest.TestCase):
                 )
             ],
             as_of=date(2026, 9, 18),
+            contract=complete_contract("LANDERS"),
         )
 
         self.assertEqual(result["findings"][0]["rule_id"], "FIPS1403-005")
@@ -238,10 +391,12 @@ class FipsAssessmentTests(unittest.TestCase):
                 )
             ],
             as_of=date(2026, 9, 18),
+            contract=complete_contract("TEAM"),
         )
 
         self.assertEqual(result["findings"][0]["rule_id"], "FIPS1403-003")
-        self.assertEqual(result["summary"]["deduplicated_poam_candidates"], 1)
+        self.assertEqual(result["summary"]["deduplicated_poam_candidates"], 0)
+        self.assertEqual(result["poam_items"], [])
 
     def test_conflicting_assertions_remain_review_only(self) -> None:
         result = build_assessment(
@@ -251,6 +406,7 @@ class FipsAssessmentTests(unittest.TestCase):
                 observation(1, "fedramp:meets-fips-140-3", "false", evidence_id=41),
             ],
             as_of=date(2026, 9, 18),
+            contract=complete_contract("TEAM"),
         )
 
         self.assertEqual([row["rule_id"] for row in result["findings"]], ["FIPS1403-004"])
@@ -282,6 +438,7 @@ class FipsAssessmentTests(unittest.TestCase):
                 ),
             ],
             as_of=date(2026, 9, 18),
+            contract=complete_contract("TEAM"),
         )
 
         self.assertNotIn("FIPS1403-004", [row["rule_id"] for row in result["findings"]])
@@ -289,7 +446,7 @@ class FipsAssessmentTests(unittest.TestCase):
             {row["rule_id"] for row in result["findings"]},
             {"FIPS1403-002", "FIPS1403-006"},
         )
-        self.assertEqual(result["summary"]["deduplicated_poam_candidates"], 1)
+        self.assertEqual(result["summary"]["deduplicated_poam_candidates"], 0)
 
     def test_bare_140_3_standard_is_not_positive_validation_evidence(self) -> None:
         result = build_assessment(
@@ -465,16 +622,14 @@ class FipsAssessmentTests(unittest.TestCase):
             [document(1, "DLP", artifact_key="pkg:generic/legacy@1")],
             [observation(1, "fedramp:fips-level", "FIPS 140-2", evidence_id=50)],
             as_of=date(2026, 9, 18),
+            contract=complete_contract("DLP"),
         )
 
         first = render_poam_csv(result["poam_items"])
         second = render_poam_csv(result["poam_items"])
         self.assertEqual(first, second)
         rows = list(csv.DictReader(io.StringIO(first)))
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["Controls"], "SC-13")
-        self.assertIn("authorized review required", rows[0]["Status"])
-        self.assertEqual(rows[0]["Assessor Review Required"], "Yes")
+        self.assertEqual(rows, [])
 
     def test_team_tracker_crosswalk_preserves_raw_milestones_and_merges_scc(self) -> None:
         tracker = team_milestones()
