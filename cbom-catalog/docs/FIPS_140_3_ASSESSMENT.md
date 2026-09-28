@@ -56,6 +56,48 @@ The container defaults `CBOM_ASSESSMENT_TIMEZONE` to `Asia/Kolkata`; set that
 environment variable to the organization-approved assessment timezone in other
 deployments. The resolved timezone is returned with the assessment date.
 
+### Assessment contract gate
+
+Candidate inference is disabled unless the deployment supplies the read-only
+`CBOM_FIPS_ASSESSMENT_CONTRACT_JSON` contract with an ATO boundary, source
+collection, exact service groups, accountable owner, `assessment_as_of`,
+authority-register path/SHA-256/retrieval date, and reporting profile. The API
+does not accept these facts from query parameters and never derives them from
+planning imports, source paths, tags, or catalog evidence. An incomplete
+contract returns only analyst observations, `assessment_run: null`, and an
+internal correlation ID; it returns zero candidate, workstream, and portfolio
+rows. Candidate and compliance-package exports return HTTP 422 with the missing
+facts. A complete contract produces a checksum-fingerprinted run manifest and
+strict candidate projections while preserving the legacy display fields.
+The contract also records an explicit authority freshness review: review date,
+reviewer, immutable reference, and SHA-256. The review date must fall between
+the authority retrieval date and the assessment `as_of` date; otherwise the run
+is evidence-only. The v1.1 run manifest preserves this review beside the pinned
+authority register.
+
+A complete contract alone does not make a signal eligible. Each candidate also
+needs a primary `deployment_attestation` with immutable source and payload
+hashes, an exact scoped artifact canonical key and digest, cryptographic
+boundary, module/version, certificate identifier, ATO boundary, assigned
+service group, and verification locator/basis. Inventory, paths, tags, package
+identities, and runtime probes cannot self-attest this correlation. The API
+applies the contract collection and group list in its SQL evidence scope; a
+filtered group view narrows the run scope and never broadens it.
+
+`/api/v1/fips/reporting/20x-preview` is an internal, non-reportable evaluation
+preview. It separates the FIPS analysis-candidate count from provider
+vulnerability evaluations (none are supplied) and lists the facts for a future
+VER-RPT-VDT evaluation: provider tracking ID, detection source/time, completed
+evaluation time, internet reachability, likely exploitability, current and
+historical PAIN ratings, completed and next reduction details, overdue state,
+supplementary agency-risk context, and final disposition. It separately lists
+conditional VER-RPT-AVI acceptance facts and reporting governance: provider
+certification class, applicability, reporting period and prior report, intended
+necessary parties, and immutable provenance. See the
+[official 20x VER rules](https://preview.fedramp.gov/2026/reference/20x/c/vulnerability-evaluation-and-reporting/).
+The preview never invents these facts from FIPS, SBOM, or package signals; it
+generates no VDR/VER record or submission.
+
 ## What the rules do
 
 The rule engine has a deliberately narrow purpose: turn normalized inventory and
@@ -70,16 +112,17 @@ Coverage observations are evaluated before technical POA&M review:
 | Parsed documents but zero usable FIPS/CMVP evidence | `evidence_gap` | No |
 | Only part of the service group has usable FIPS/CMVP evidence | `evidence_gap` | No |
 
-The Workbench shows these in **Coverage gaps / evidence requests**, joined to
-Team Tracker owner, lead, IL2, and IL5 planning metadata. It never substitutes
-demo CNHE or other sample records when the live assessment API is unavailable;
-an explicit unavailable state is shown instead.
+The Workbench shows these in **Coverage gaps / evidence requests**. For an
+assigned pair, Team Tracker owner, lead, IL2, and IL5 planning metadata is
+withheld until its immutable import carries source collection provenance. It
+never substitutes demo CNHE or other sample records when the live assessment
+API is unavailable; an explicit unavailable state is shown instead.
 
 | Rule | Signal | Output state | POA&M candidate? |
 |---|---|---|---|
-| `FIPS1403-001` | Affirmative FIPS 140-2 use evidence without an accepted FIPS 140-3 deployment match | `likely_gap` | Yes |
-| `FIPS1403-002` | Explicit FIPS 140-3 negative/not-validated assertion | `likely_gap` | Yes |
-| `FIPS1403-003` | Negative runtime FIPS observation for an identified library | `likely_gap` | Yes |
+| `FIPS1403-001` | Affirmative FIPS 140-2 use evidence without an accepted FIPS 140-3 deployment match | `likely_gap` | Only after contract and primary deployment-correlation gates |
+| `FIPS1403-002` | Explicit FIPS 140-3 negative/not-validated assertion | `likely_gap` | Only after contract and primary deployment-correlation gates |
+| `FIPS1403-003` | Negative runtime FIPS observation for an identified library | `likely_gap` | Only after contract and primary deployment-correlation gates |
 | `FIPS1403-004` | Conflicting positive and negative evidence | `evidence_gap` | No |
 | `FIPS1403-005` | Inconclusive runtime probe, such as a missing library | `evidence_gap` | No |
 | `FIPS1403-006` | Unknown, pending, or incomplete validation evidence | `evidence_gap` | No |

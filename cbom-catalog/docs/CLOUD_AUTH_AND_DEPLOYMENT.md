@@ -1,8 +1,8 @@
 # Cloud authentication and AWS deployment assessment
 
 This document records the AWS assessment performed on 2026-09-18, the staged
-ECS deployment performed on 2026-09-22, and the latest application rollout on
-2026-09-24. It intentionally contains no OIDC client secret, database password,
+ECS deployment performed on 2026-09-22, and application rollouts through
+2026-09-27. It intentionally contains no OIDC client secret, database password,
 bearer token, or source inventory payload.
 
 ## Authentication modes
@@ -11,9 +11,9 @@ The Next.js console supports three explicit modes:
 
 | Mode | Intended use | Behavior |
 | --- | --- | --- |
-| `dev` | local development only | Presents a single click-through login and sets an eight-hour, HTTP-only, SameSite cookie. Production blocks this mode unless the operator explicitly sets `CBOM_ALLOW_INSECURE_DEV_AUTH=true`. Do not set that override in AWS. |
+| `local-admin` | localhost development only | Presents a single administrator click-through login when `CBOM_ENVIRONMENT=local` and the request host is loopback. Docker Compose binds web and API ports to loopback. This mode is not available in the cloud task. |
 | `alb-oidc` | any cloud environment, including dev | Requires and cryptographically verifies the ALB-signed `x-amzn-oidc-data` JWT. Verification checks ES256, expiry, client ID, expected ALB ARN, and the GovCloud regional ALB public key. |
-| `disabled` | tests or local diagnostics only | Allowed outside production. Production fails closed. |
+| `disabled` | isolated tests only | Does not admit browser requests. Production fails closed. |
 
 The public health endpoint is `/healthz`. The login page and local login action
 are the only other unauthenticated application routes. The FastAPI service is a
@@ -124,12 +124,12 @@ The full procedure is in [DATABASE_SNAPSHOTS.md](DATABASE_SNAPSHOTS.md).
 
 The `cbom-workbench-dev` CloudFormation stack is deployed in account
 `135124134289`, region `us-gov-east-1`, with termination protection enabled.
-The ECS service is active at desired/running count 1 on an immutable
-`deploy-20260924-1` image tag. Both targets are healthy, `/healthz` returns 200,
+The ECS service is active at desired/running count 1 on immutable
+`deploy-20260927-1` images. Both targets are healthy, `/healthz` returns 200,
 and unauthenticated application requests redirect to the configured OIDC
 provider.
 
-Migrations through 015 are applied. The Admin workspace and scoped API can create
+Migrations through 020 are applied. The Admin workspace and scoped API can create
 checksum-manifested batches, upload directly to the private temporary S3 prefix,
 launch the one-off ECS task asynchronously, and inspect job status, bounded
 CloudWatch logs, and results. The deployed S3 CORS policy allows only the
@@ -168,5 +168,23 @@ https://cbom.swg.dev-umbrellagov.com/oauth2/idpresponse
 ```
 
 The API hostname fails closed without a valid scoped application credential.
-Do not disable OIDC, disclose credentials, or add a path that bypasses scope
-enforcement. See [ACCESS_CONTROL_AND_OVERLAYS.md](ACCESS_CONTROL_AND_OVERLAYS.md).
+Do not disable OIDC, disclose credentials, or add a catalog-data path that
+bypasses scope enforcement. See
+[ACCESS_CONTROL_AND_OVERLAYS.md](ACCESS_CONTROL_AND_OVERLAYS.md).
+
+## MyID group claim contract
+
+The ALB requests `openid email groups`. The Next.js console verifies the
+ALB-signed identity and passes only its `groups` claim to the API. The API
+matches exact `fedsse-` group names against the deployment-owned policy;
+`fedsse-admins` takes precedence over summary or service groups. A custom
+`memberships` claim is not an authorization input and is not requested by the
+deployed ALB. Keep the MyID `groups` claim and restrict its group selector to
+the `fedsse-` prefix so unrelated memberships do not enlarge UserInfo.
+
+The temporary OIDC claim diagnostics were removed after the direct MyID
+UserInfo and fresh CBOM login confirmed the administrator entitlement. The
+[product cleanup change record](CHANGE_RECORD_2026-09-27_OIDC_PRODUCT_CLEANUP.md)
+records the deployment and remaining access gate. The earlier diagnostic
+deployment record remains historical audit evidence. Do not record raw claims, browser
+cookies, authorization codes, or tokens in source control.

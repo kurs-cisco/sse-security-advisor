@@ -24,13 +24,124 @@ cd ../cbom-console
 npm run lint
 npx tsc --noEmit --incremental false
 npm run build
+cd ../infra
+npm run test
+npm run build
 ```
 
 Confirm API health and representative routes: dashboard, service-group register,
 service detail, document components, library inventory/usage, team milestones,
-assessment paging, issues, and all three exports.
+assessment paging, issues, and all four candidate exports.
+
+For an assigned-service review, use two different configured principals with
+disjoint grants and pass one exact `(source_collection, service_group,
+product_scope_id)` triple on
+every service-data request. Compare dashboard, register, document, component,
+artifact, dependency, fingerprint, FIPS, 20x, and export responses with the
+selected triple. Direct IDs from the other principal's group or product must
+return 404;
+unscoped or ungranted reads and global operational routes must return 403.
+Verify all administrator methods reject an assigned-only principal. The live
+review may use a temporary read-only database connection and review-only grant
+configuration; it must not modify ingestion, planning, assessment, or user data.
+Target-module and Team Tracker planning views remain unavailable to assigned
+lead/engineer pairs until their immutable records carry collection provenance.
+Service Catalog shows only exact-grant service rows to assigned roles. The
+reviewed Team Tracker baseline applies to `sse-cboms` only; service-impact
+values use their recorded collection/group. A same-named group in another
+collection cannot inherit SSE planning. Its Admin evidence drawer must not become a path
+for assigned roles to fetch planning, candidate, or POA&M detail. Review the
+signed role views against live data before service-team release.
+
+### Evidence-only contract gate
+
+For a read-only deployment without an approved complete assessment contract,
+verify the assessment returns `assessment_run: null`, explicit missing facts,
+and zero candidate/workstream/portfolio rows. Candidate CSV, workstream CSV,
+portfolio CSV, and the compliance ZIP must return HTTP 422; the console must
+disable those downloads and show the analyst-observation queue. Do not create
+credentials or overlays and do not run an ingestion flow during this validation.
+When a separately approved complete deployment contract is supplied, repeat the
+export checks and reconcile every payload to the run manifest and evidence
+fingerprints.
 
 ## Browser flows
+
+For Service Catalog, apply migrations 022–024 before enabling
+`enableServiceCatalog`. Confirm the table contains the existing 40 service
+groups with imported Admin-only planning context and distinguishes managed
+revisions from imported values. Check Add, Edit, approval review, exact scoped
+Lead proposals, read-only Engineer mode, and Summary denial. Test create,
+publish, proposal, approval, rejection, stale revision, and self-approval
+denial and intentional clearing of imported values in an isolated database;
+do not add or edit live authored records during
+read-only browser validation. A new managed group must have no fabricated
+source files or routing and must receive an exact Admin group mapping before a
+service role can access it. Verify the Admin evidence drawer opens only where
+current files exist and its close button works. Compare source counts and
+checksums before and after all three migrations. Planning status and dates are
+operational assertions, not ATO or FIPS validation evidence.
+
+For Admin group-to-service mapping, apply migration 021 before deploying with
+`enableAdminGroupMapping=true`. Confirm the Admin view starts from the exact
+40-service deployment seed and shows both product contexts, including the five
+registered services with no source evidence. Confirm that every mapping target
+renders its current-source-file and fingerprinted-source-file counts; a zero
+fingerprinted count must render **Evidence gap** and coverage unknown, without
+implying compliance, validation, authorization, product evidence, FIPS
+evidence, or absence of risk. These are catalog inventory counts only. Image
+`deploy-20260927-10` completed `UPDATE_COMPLETE`, ECS web revision-29 at 1/1,
+and `/healthz` 200 checks. Its signed Admin browser validation loaded 40 rows,
+534 current files, and five zero-SHA/zero-file rows; it confirmed the
+inventory-only disclaimer, no “CBOM source evidence” label, and gap pills for
+Android, iOS, On Prem/Clients, RSM Secure Client, and SWG Roaming Client. An
+initial direct API fetch without the active-mode header correctly returned 403;
+the same API returned 200 with the proper Admin mode header. Confirm the
+disposable PostgreSQL count test covers invalid, empty, historical, and
+separate-collection inputs. The disposable PostgreSQL policy-lifecycle test
+passed add, stale-revision denial, remap, retire, audit-chain, and immediate
+next-request grant checks. With disposable policy revisions
+only, verify an Admin can add, remap, and retire a paired exact Lead/Engineer
+group with a reason; the audit event records actor, request ID, old/new mapping,
+and revision. Concurrent stale revisions, unknown catalog groups, duplicate
+targets, wildcard names, unsupported products, and a token or non-Admin caller
+must be denied. A published change must affect the next signed request without
+altering MyID memberships. Restore the original policy through a new audited
+revision after the exercise; never delete revision history. Mapping and routing
+labels must not appear as ATO, CMVP, or FIPS validation evidence.
+
+For the staged OIDC group rollout, verify exact `fedsse-admins`,
+`fedsse-external`, `fedsse-scr2-leads`, service lead, and service engineer
+claims with separate Chrome sessions or Playwright fixtures. An unmatched
+signed-in user must see no catalog data. External and SCR2 users may see only
+numeric all-service Overview and POA&M summaries; direct Inventory,
+Service Catalog, candidate details, exports, and raw APIs must deny access.
+Leads and engineers may see the same aggregates and their verified grant cards;
+when the product-detail capability is enabled, detail must stay within their
+exact collection/service/ATO grants. Check mixed memberships and direct ID
+tampering.
+For an identity with multiple exact access categories, verify `/auth/me`
+offers only verified modes, blocks data routes until a mode is selected, and
+shows the verified identity, active mode, and complete grant union in the
+profile. Changing the browser mode must not add an unverified entitlement.
+Admin must open all portfolio and Admin views without a product picker; Product
+Lead and Product Engineer must see every verified service grant together in
+their workspace without a product picker. Check that engineer mode is read
+only even when the same identity also has lead or admin groups. With the
+product-detail capability disabled, those workspaces may show verified grant
+placeholders but must not fetch or imply evidence counts for a product.
+Test revoke/restore and token persistence against isolated test data only. The
+operational schemas in migrations 016–021 are applied and verified live.
+Product-scoped catalog detail is enabled for exact grants; roster, lead review
+proposals, and operational evidence notes remain disabled. Product candidate
+output and exports still require a complete verified assessment contract. Test a lead's exact product-scoped
+evidence-observation submission, engineer and cross-pair denial, a distinct
+human administrator's approval/rejection, stale-item conflict, and the
+append-only audit trail. These observations must remain separate from
+assessment and POA&M conclusions. Local admin login must work on loopback and
+fail in cloud configuration. Do not enable detailed evidence or writes while
+exact service grants, MyID claim checks, or the operational access workflow
+remain incomplete.
 
 - [ ] Unauthenticated navigation redirects to login; local login returns safely
       to an internal path.
@@ -38,27 +149,41 @@ assessment paging, issues, and all three exports.
       legible.
 - [ ] Inventory service, library, and heatmap views filter, sort, page, and open
       document/component drawers.
-- [ ] Accountability groups by executive owner; owner/lead/IL2/IL5 filters and
-      sorting work; POA&M impact, service-impact risk, and comments render without
-      changing those planning values; the service drawer shows import
-      provenance, evidence, libraries, findings, and POA&M mappings.
-- [ ] Accountability and POA&M show the same canonical candidate and workstream
-      IDs, owner, mitigation date, linked-finding count, and affected scope for
-      every service-group drawer.
+- [ ] Service Catalog lists all collection/service rows in Admin mode and only
+      exact-grant rows in Lead/Engineer mode. Check search, owner/profile,
+      IL2/IL5 status and date, impact risk, comments, publication state, and
+      Add/Edit/proposal controls by role. Imported Team Tracker fields appear
+      only for exact `sse-cboms` grants, and impact values match the exact
+      collection/group. Approved managed values override imported fields.
+- [ ] The Admin-only evidence drawer opens for rows with source files, pages
+      documents and libraries without skipping rows, and closes by button,
+      Escape, and backdrop. Assigned roles cannot reach its planning,
+      candidate, or POA&M detail APIs through the Service Catalog.
 - [ ] Target-module planning assertions are visibly labeled as non-findings;
       asserted active-certificate badges reflect verification conflicts instead
       of implying validation.
 - [ ] POA&M workstream/candidate views, coverage gaps, filters, paging, drawers,
-      and compliance ZIP/workstream CSV/asset CSV downloads work.
-- [ ] The invited administrator activates on first OIDC login; viewers do not
-      see the Admin navigation or mutate catalog state.
-- [ ] Generate a short-lived scoped credential in Admin, exercise one permitted
-      read and one temporary overlay create/deactivate through the API hostname,
-      then revoke it and confirm subsequent access returns `401`.
-- [ ] Create a dry-run ingestion batch through the public API, upload directly
+      and compliance ZIP/workstream CSV/asset CSV downloads follow the active
+      assessment-contract gate.
+- [ ] Exact `fedsse-admins` membership enables Admin; unmatched, external, and
+      engineer accounts cannot see Admin or mutate catalog state.
+- [ ] Product-scoped catalog detail verifies the current source SHA-256 routing
+      decision for the requested exact product triple on every evidence query
+      and direct ID. All 534 current files have audited default-both routing;
+      disposable PostgreSQL execution tests cover scoped queries. Assessment
+      and export routes remain separately gated by a verified product contract.
+      The exact 40-service registry supplies grant metadata and Admin mapping.
+      Recheck MyID claims and the live role matrix before expanding access.
+      Owner-declared labels and routing decisions do not prove authorization.
+- [ ] With the applied roster/revoke schema and disabled-by-default application
+      capability enabled only in isolated test data, generate a short-lived scoped credential
+      in Admin, exercise one permitted read and one temporary overlay
+      create/deactivate through the API hostname, then revoke it and confirm
+      subsequent access returns `401`.
+- [ ] After ingestion approval, create a dry-run ingestion batch through the public API, upload directly
       to its presigned S3 URLs, and confirm the ECS task reaches `succeeded`, all
       checksums verify, and the catalog comparison reports no unexpected delta.
-- [ ] Repeat the dry-run from Admin: folder discovery and browser checksumming
+- [ ] After ingestion approval, repeat the dry-run from Admin: folder discovery and browser checksumming
       complete, direct S3 upload succeeds without CORS errors, job state polls,
       and the selected job shows CloudWatch logs and the same comparison result.
 - [ ] Primary navigation stays fixed on desktop and the bottom navigation works
