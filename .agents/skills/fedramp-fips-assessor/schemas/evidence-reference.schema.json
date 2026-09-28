@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["evidence_kind", "claim_supported", "evidence_grade", "limitations"],
   "properties": {
-    "evidence_kind": {"enum": ["fips_tool_result", "cyclonedx_property", "crypto_asset", "curated_csv", "oscal", "source_fingerprint", "official_authority", "manual_attestation"]},
+    "evidence_kind": {"enum": ["fips_tool_result", "cyclonedx_property", "crypto_asset", "curated_csv", "oscal", "source_fingerprint", "catalog_coverage", "deployment_attestation", "official_authority", "manual_attestation"]},
     "source_collection": {"type": ["string", "null"]},
     "service_group": {"type": ["string", "null"]},
     "source_path": {"type": ["string", "null"]},
@@ -16,6 +16,14 @@
     "payload_sha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
     "observed_at": {"type": ["string", "null"], "format": "date-time"},
     "locator": {"type": ["string", "null"]},
+    "artifact_canonical_key": {"type": "string", "minLength": 1},
+    "artifact_digest": {"type": "string", "pattern": "^(sha256:[a-f0-9]{64}|sha512:[a-f0-9]{128})$"},
+    "crypto_boundary_identity": {"type": "string", "minLength": 1},
+    "module_identity": {"type": "string", "minLength": 1},
+    "module_version": {"type": "string", "minLength": 1},
+    "certificate_identifier": {"type": "string", "minLength": 1},
+    "ato_boundary": {"type": "string", "minLength": 1},
+    "verification_basis": {"type": "string", "minLength": 1},
     "claim_supported": {"type": "string", "minLength": 1},
     "evidence_grade": {"enum": ["primary", "tool_observation", "inventory", "curated_analysis", "user_asserted"]},
     "limitations": {"type": "array", "items": {"type": "string"}, "minItems": 1}
@@ -30,6 +38,34 @@
           "service_group": {"type": "string", "minLength": 1},
           "source_path": {"type": "string", "minLength": 1},
           "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"evidence_kind": {"const": "catalog_coverage"}}, "required": ["evidence_kind"]},
+      "then": {
+        "required": ["source_collection", "service_group", "locator"],
+        "properties": {
+          "source_collection": {"type": "string", "minLength": 1},
+          "service_group": {"type": "string", "minLength": 1},
+          "locator": {"type": "string", "minLength": 1},
+          "evidence_grade": {"const": "inventory"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"evidence_kind": {"const": "deployment_attestation"}}, "required": ["evidence_kind"]},
+      "then": {
+        "required": ["source_collection", "service_group", "source_path", "source_sha256", "document_id", "payload_sha256", "locator", "artifact_canonical_key", "artifact_digest", "crypto_boundary_identity", "module_identity", "module_version", "certificate_identifier", "ato_boundary", "verification_basis"],
+        "properties": {
+          "source_collection": {"type": "string", "minLength": 1},
+          "service_group": {"type": "string", "minLength": 1},
+          "source_path": {"type": "string", "minLength": 1},
+          "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "document_id": {"type": "integer", "minimum": 1},
+          "payload_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "locator": {"type": "string", "minLength": 1},
+          "evidence_grade": {"const": "primary"}
         }
       }
     }

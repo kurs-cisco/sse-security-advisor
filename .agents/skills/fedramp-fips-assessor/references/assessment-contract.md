@@ -50,6 +50,11 @@ approved SSP/SAP/SAR or control crosswalk.
 - Do not use the transition dates without the authority record below. If the
   authority is superseded or the assessment time differs, preserve both the
   quoted authority and the assessment `as_of` timestamp.
+- Require an accountable, checksum-addressed currency review of the authority
+  register for the stated assessment date. Record reviewer, review date,
+  immutable review reference, and review SHA-256. A retrieval date alone does
+  not establish that the source remains current; this review is not an AO or
+  compliance authorization.
 
 ## Required confirmation evidence
 

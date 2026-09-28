@@ -18,8 +18,9 @@ authorized assessor and the Authorizing Official (AO), with system-owner input.
 ## Required inputs
 
 Before assessment, capture the ATO boundary, source collection, service-group
-scope, assessment `as_of` timestamp, accountable owner, and an authoritative
-deadline/policy source. If any are absent, continue only with the state
+scope, assessment `as_of` timestamp, accountable owner, an authoritative
+deadline/policy source, and an immutable, accountable review of that source's
+currency for the assessment date. If any are absent, continue only with the state
 `not_assessable` or `evidence_gap`; do not fill them from filenames or tags.
 
 Read [assessment-contract.md](references/assessment-contract.md),
@@ -43,17 +44,30 @@ before classifying results.
    `not_assessable`, `validated_pending_review`, or `out_of_scope_candidate`.
    Follow the evidence grade and classification constraints exactly. An
    incomplete contract case, unresolved correlation, or unresolved evidence
-   conflict must be emitted as an analyst observation validated by
-   `schemas/analyst-observation.schema.json` with `poam_eligibility: false`.
-   It cannot become a POA&M candidate yet.
+   conflict with a known catalog subject must be emitted as an analyst
+   observation validated by `schemas/analyst-observation.schema.json` with
+   `poam_eligibility: false`. Preserve its actual collection, service group,
+   and source or catalog-coverage reference. If no scoped subject/evidence
+   exists, return a top-level incomplete-contract status and missing facts
+   instead of fabricating an observation. None of these cases can become a
+   POA&M candidate.
+   A complete assessment contract is necessary but does not prove deployment.
+   Candidate eligibility also requires a primary deployment attestation that
+   correlates an immutable deployed artifact digest to the exact cryptographic
+   module and boundary, certificate, ATO boundary, and assigned service group.
+   Package names, component identities, document adjacency, and FIPS-mode tool
+   signals cannot satisfy this gate.
 5. Dedupe only findings sharing the same root cause, validated-module or
    cryptographic-boundary identity, remediation strategy, accountable owner,
    and ATO boundary. Put affected services under that POA&M candidate; never
    merge different versions, runtime configurations, owners, or remediations
    merely because a package name matches.
-6. Emit an assessment-run record, analyst observations, and only eligible POA&M
-   candidate records validated against the schemas in `schemas/`. Generate the
-   auditor-facing view from the same evidence manifest, not from inferred prose.
+6. Emit a schema-valid assessment-run record only after all required contract
+   facts are supplied. Before then, retain a deterministic internal execution
+   correlation ID, but do not represent it as an assessment-run manifest or an
+   assessor conclusion. Validate catalog-backed analyst observations and only
+   eligible POA&M candidate records against the schemas in `schemas/`. Generate
+   the auditor-facing view from the same evidence manifest, not from inferred prose.
 
 ## Current corpus interpretation
 
@@ -79,6 +93,11 @@ Return both:
 2. An auditor view: deduplicated candidate POA&M items, affected scoped
    services, evidence manifest, condition, risk rationale, remediation,
    milestones, evidence gaps, and limitations.
+
+The Rev. 5 candidate view and FedRAMP 20x evaluation preview are separate
+outputs. A 20x preview is incomplete and nonreportable until every required
+VDR/VER fact is present and profile-specific validation succeeds. Do not
+present a candidate ZIP or CSV as a 20x submission.
 
 Use [evidence-request.md](templates/evidence-request.md) for every missing
 fact that prevents a confirmation. Do not mark an item closed; only propose

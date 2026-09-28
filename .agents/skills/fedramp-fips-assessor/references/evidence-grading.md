@@ -4,9 +4,9 @@
 
 | Grade | Examples | What it can support |
 |---|---|---|
-| `primary` | CMVP certificate/security policy, signed deployment attestation, approved SSP/SAP/SAR extract | Exact identity or approved scope only when the artifact/boundary correlation is explicit. |
+| `primary` | CMVP certificate/security policy, signed deployment attestation with immutable source and payload checksums, approved SSP/SAP/SAR extract | Exact identity or approved scope only when the artifact/boundary correlation is explicit. A certificate alone does not establish deployed use. |
 | `tool_observation` | `fips_tool_result`, runtime command output, scanner result | A timestamped observed signal; never a validation conclusion by itself. |
-| `inventory` | CycloneDX/SPDX component, crypto asset, artifact record, fingerprint | Presence/provenance of inventory data; not runtime use or validated status. |
+| `inventory` | CycloneDX/SPDX component, crypto asset, artifact record, fingerprint, scoped catalog-coverage count | Presence/provenance of inventory data; not runtime use or validated status. A catalog-coverage count can establish only whether evidence was ingested for a registered service group. |
 | `curated_analysis` | Crypto CSV recommendation, analyst enrichment | A triage lead requiring confirmation. |
 | `user_asserted` | Manual scope, ownership, deadline, or deployment assertion | Planning input until independently attested and recorded. |
 

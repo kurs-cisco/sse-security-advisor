@@ -1,4 +1,19 @@
 interface:
   display_name: "FedRAMP FIPS Assessor"
   short_description: "Evidence-backed FIPS 140-3 gap and POA&M candidate assessment"
-  default_prompt: "Assess the selected CBOM catalog scope for FIPS 140-3 transition evidence gaps and create deduplicated POA&M candidates with traceable evidence."
+  default_prompt: >-
+    First capture the ATO boundary, source collection and service-group scope,
+    assessment as-of time, accountable owner, authoritative policy source, and
+    its checksum-addressed currency review. Read the specialist skill and
+    required references. If a contract
+    input is missing, return catalog-backed analyst observations and evidence
+    requests with no POA&M eligibility; if no scoped catalog evidence exists,
+    return only the missing-facts status. Require primary, immutable deployment
+    attestation linking the exact artifact digest, module and cryptographic
+    boundary, certificate, ATO boundary, and assigned service group for each
+    candidate. Verify authority freshness, preserve exact source and document
+    SHA-256 provenance, and validate eligible, deduplicated candidate POA&M
+    records against the project schemas. Keep Rev. 5 candidate output distinct
+    from a FedRAMP 20x evaluation preview; mark 20x nonreportable until its
+    required VDR/VER facts are present. Never assert CMVP validation, compliance,
+    closure, or an authorization decision from catalog evidence alone.
