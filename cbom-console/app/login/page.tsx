@@ -1,10 +1,13 @@
 import { Boxes, LockKeyhole, ShieldCheck } from "lucide-react";
-import { authMode, devAuthAllowed, safeReturnTo } from "@/app/lib/auth-config";
+import { headers } from "next/headers";
+import { localAdminAllowed, safeReturnTo } from "@/app/lib/auth-config";
 
 export default async function LoginPage({ searchParams }: { searchParams: Promise<{ returnTo?: string; reason?: string }> }) {
   const query = await searchParams;
-  const mode = authMode();
-  const showDevLogin = mode === "dev" && devAuthAllowed();
+  const host = (await headers()).get("host") ?? "";
+  let hostname = "";
+  try { hostname = new URL(`http://${host}`).hostname; } catch { /* Invalid host cannot enable local login. */ }
+  const showDevLogin = localAdminAllowed(hostname);
   return <main className="login-page">
     <section className="login-card surface-card" aria-labelledby="login-title">
       <div className="login-brand"><span className="brand-mark"><Boxes size={21} /></span><div><p className="eyebrow">Supply-chain intelligence</p><strong>CBOM Workbench</strong></div></div>

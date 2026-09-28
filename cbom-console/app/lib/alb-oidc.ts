@@ -11,6 +11,7 @@ export type AlbIdentity = {
   email: string;
   name?: string;
   groups: string[];
+  groupsClaimType: "absent" | "string" | "array";
 };
 
 type VerificationResult = { ok: true; identity: AlbIdentity } | { ok: false; reason: string };
@@ -94,18 +95,42 @@ export async function verifyAlbOidcToken(token: string): Promise<VerificationRes
       new TextEncoder().encode(`${encodedHeader}.${encodedPayload}`),
     );
     if (!verified) return { ok: false, reason: "Identity signature is invalid" };
-    const claims = decodeJson<{ sub?: string; email?: string; name?: string; groups?: string[] | string }>(encodedPayload);
-    if (!claims.sub || !claims.email) return { ok: false, reason: "Identity subject and email are required" };
-    const groups = Array.isArray(claims.groups)
-      ? claims.groups.map(String)
-      : typeof claims.groups === "string"
-        ? claims.groups.split(/[ ,]+/).filter(Boolean)
-        : [];
+    const claims = decodeJson<{ sub?: unknown; email?: unknown; name?: unknown; groups?: unknown }>(encodedPayload);
+    if (!isNonEmptyString(claims.sub) || !isNonEmptyString(claims.email)) {
+      return { ok: false, reason: "Identity subject and email are required" };
+    }
+    if (claims.name !== undefined && typeof claims.name !== "string") {
+      return { ok: false, reason: "Identity name claim is invalid" };
+    }
+    // A claim value is an entitlement identifier. Preserve it exactly: a group
+    // name may legitimately contain whitespace or punctuation. Reject mixed
+    // arrays rather than coercing values into a different entitlement.
+    let groups: string[];
+    let groupsClaimType: AlbIdentity["groupsClaimType"];
+    if (Array.isArray(claims.groups)) {
+      if (!claims.groups.every((group) => typeof group === "string")) {
+        return { ok: false, reason: "Identity group claim is invalid" };
+      }
+      groups = claims.groups;
+      groupsClaimType = "array";
+    } else if (typeof claims.groups === "string") {
+      groups = [claims.groups];
+      groupsClaimType = "string";
+    } else if (claims.groups === undefined) {
+      groups = [];
+      groupsClaimType = "absent";
+    } else {
+      return { ok: false, reason: "Identity group claim is invalid" };
+    }
     return {
       ok: true,
-      identity: { subject: claims.sub, email: claims.email, name: claims.name, groups },
+      identity: { subject: claims.sub, email: claims.email, name: claims.name, groups, groupsClaimType },
     };
   } catch {
     return { ok: false, reason: "Identity token could not be verified" };
   }
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }

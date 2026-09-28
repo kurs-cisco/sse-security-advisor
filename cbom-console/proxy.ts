@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { authMode, DEV_AUTH_COOKIE, devAuthAllowed, safeReturnTo } from "@/app/lib/auth-config";
+import { authMode, DEV_AUTH_COOKIE, localAdminRequestAllowed, safeReturnTo } from "@/app/lib/auth-config";
 import { verifyAlbOidcToken } from "@/app/lib/alb-oidc";
 
 const PUBLIC_PATHS = new Set(["/login", "/healthz", "/icon.svg", "/auth/dev-login"]);
@@ -20,11 +20,10 @@ export async function proxy(request: NextRequest) {
 
   const mode = authMode();
   if (mode === "disabled") {
-    if (process.env.NODE_ENV === "production") return unauthenticated(request, "Authentication cannot be disabled in production");
-    return NextResponse.next();
+    return unauthenticated(request, "Authentication is disabled");
   }
-  if (mode === "dev") {
-    if (!devAuthAllowed()) return unauthenticated(request, "Development authentication is disabled in production");
+  if (mode === "local-admin") {
+    if (!localAdminRequestAllowed(request.headers)) return unauthenticated(request, "Local administrator login is only available on localhost");
     if (request.cookies.get(DEV_AUTH_COOKIE)?.value !== "authenticated") return unauthenticated(request, "Sign in to continue");
     return NextResponse.next();
   }

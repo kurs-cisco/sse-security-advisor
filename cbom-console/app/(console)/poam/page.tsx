@@ -1,5 +1,6 @@
 import { PoamWorkbench } from "@/components/poam/poam-workbench";
+import { ConsoleShell } from "@/app/components/console-shell";
 
 export default function PoamPage() {
-  return <PoamWorkbench />;
+  return <ConsoleShell><PoamWorkbench /></ConsoleShell>;
 }

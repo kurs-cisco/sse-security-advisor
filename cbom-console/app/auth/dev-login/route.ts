@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { authMode, DEV_AUTH_COOKIE, devAuthAllowed, safeReturnTo } from "@/app/lib/auth-config";
+import { DEV_AUTH_COOKIE, localAdminRequestAllowed, safeReturnTo } from "@/app/lib/auth-config";
 
 export async function POST(request: NextRequest) {
-  if (authMode() !== "dev" || !devAuthAllowed()) {
-    return NextResponse.json({ detail: "Development login is not available" }, { status: 403 });
+  if (!localAdminRequestAllowed(request.headers)) {
+    return NextResponse.json({ detail: "Local administrator login is not available" }, { status: 403 });
   }
   const form = await request.formData();
   const response = new NextResponse(null, {

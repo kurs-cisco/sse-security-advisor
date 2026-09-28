@@ -16,6 +16,8 @@ import {
 import { fetchJson } from "@/app/lib/http";
 import { Badge } from "@/app/components/ui/badge";
 import { Card } from "@/app/components/ui/card";
+import { DEFAULT_PRODUCT_SCOPE_IDS, PRODUCT_SCOPES, productScopeLabel, type ProductScopeId } from "@/app/lib/product-scopes";
+import { MappingDialog } from "@/components/admin/service-group-mapping";
 
 type BatchState =
   | "uploading"
@@ -63,6 +65,7 @@ type BatchResult = {
 type IngestionBatch = {
   id: string;
   source_collection: string;
+  product_scope_ids?: ProductScopeId[];
   manifest_sha256: string;
   dry_run: boolean;
   authoritative_snapshot: boolean;
@@ -182,7 +185,7 @@ function ResultPanel({ batch }: { batch: IngestionBatch }) {
   return <div className="ingestion-results">
     <div className={`ingestion-result-banner${failed ? " ingestion-result-failed" : ""}`} role={failed ? "alert" : "status"}>
       {failed ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
-      <div><strong>{failed ? "Batch did not complete" : succeeded ? result.catalog_changes_applied ? "Catalog updated" : "Dry run completed without catalog changes" : "Batch result is still pending"}</strong><span>{result.checksum_verified_files ?? batch.verified_file_count} checksums verified</span></div>
+      <div><strong>{failed ? "Batch did not complete" : succeeded ? result.catalog_changes_applied ? "Catalog updated" : "Dry-run validation passed — no catalog changes" : "Batch result is still pending"}</strong><span>{result.checksum_verified_files ?? batch.verified_file_count} checksums verified</span></div>
     </div>
     {result.inventory && <div className="result-metrics">
       <div><span>Files</span><strong>{result.inventory.total_files.toLocaleString()}</strong></div>
@@ -217,9 +220,11 @@ export function IngestionWorkspace({ operatorReady }: { operatorReady: boolean }
   const [logs, setLogs] = useState<BatchLogs | null>(null);
   const [files, setFiles] = useState<SelectedFile[]>([]);
   const [sourceCollection, setSourceCollection] = useState("sse-cboms");
+  const [productScopeIds, setProductScopeIds] = useState<ProductScopeId[]>(DEFAULT_PRODUCT_SCOPE_IDS);
   const [dryRun, setDryRun] = useState(true);
   const [authoritativeSnapshot, setAuthoritativeSnapshot] = useState(false);
   const [authoritativeConfirmation, setAuthoritativeConfirmation] = useState("");
+  const [confirmIngestion, setConfirmIngestion] = useState(false);
   const [error, setError] = useState("");
   const [loadingJobs, setLoadingJobs] = useState(true);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -291,7 +296,7 @@ export function IngestionWorkspace({ operatorReady }: { operatorReady: boolean }
     }
   }
 
-  async function startIngestion() {
+  async function startIngestion(confirmed = false) {
     setError("");
     if (!files.length) {
       setError("Choose a folder containing .json or .csv corpus files first");
@@ -301,14 +306,22 @@ export function IngestionWorkspace({ operatorReady }: { operatorReady: boolean }
       setError("Source collection must be a lowercase slug using letters, numbers, and hyphens");
       return;
     }
+    if (!productScopeIds.length) {
+      setError("Select Government, Defense, or both for this new upload");
+      return;
+    }
     if (!dryRun && authoritativeSnapshot && authoritativeConfirmation !== sourceCollection) {
       setError(`Type ${sourceCollection} to confirm this complete authoritative snapshot.`);
       return;
     }
-    if (!dryRun && !window.confirm(authoritativeSnapshot ? `Apply this complete authoritative snapshot to ${sourceCollection}? Paths absent from this manifest will be marked historical.` : "This run will update catalog data after validation. Continue?")) return;
+    if (!dryRun && !confirmed) { setConfirmIngestion(true); return; }
+    setConfirmIngestion(false);
 
     try {
       const manifestFiles: ManifestFile[] = [];
+      // The selected contexts are part of the checksum-bound manifest. Keep
+      // their order deterministic even if the operator toggles them manually.
+      const canonicalProductScopeIds = [...productScopeIds].sort();
       setProgress({ phase: "hashing", completed: 0, total: files.length, message: "Computing local SHA-256 checksums" });
       for (let index = 0; index < files.length; index += 1) {
         const selected = files[index];
@@ -323,8 +336,9 @@ export function IngestionWorkspace({ operatorReady }: { operatorReady: boolean }
       }
 
       const normalizedManifest = {
-        schema_version: 1,
+        schema_version: 2,
         source_collection: sourceCollection,
+        product_scope_ids: canonicalProductScopeIds,
         dry_run: dryRun,
         authoritative_snapshot: dryRun ? false : authoritativeSnapshot,
         files: manifestFiles,
@@ -337,6 +351,7 @@ export function IngestionWorkspace({ operatorReady }: { operatorReady: boolean }
         timeoutMs: 60_000,
         body: JSON.stringify({
           source_collection: sourceCollection,
+          product_scope_ids: canonicalProductScopeIds,
           dry_run: dryRun,
           authoritative_snapshot: dryRun ? false : authoritativeSnapshot,
           manifest_sha256: manifestSha256,
@@ -404,6 +419,7 @@ export function IngestionWorkspace({ operatorReady }: { operatorReady: boolean }
         <div className="card-heading"><div><p className="eyebrow">New batch</p><h3><UploadCloud size={18} />Select a corpus folder</h3></div><Badge tone={dryRun ? "info" : "warning"}>{dryRun ? "Dry run" : "Writes enabled"}</Badge></div>
         <div className="ingestion-form">
           <label>Source collection<input value={sourceCollection} onChange={(event) => setSourceCollection(event.target.value.toLocaleLowerCase())} disabled={busy} /></label>
+          <fieldset className="product-scope-picker" disabled={busy}><legend>Product attribution for this new upload</legend><p>Choose where this new evidence applies. Existing catalog evidence retains its recorded default-both attribution; this choice applies only to this new upload.</p>{PRODUCT_SCOPES.map((scope) => <label key={scope.id} className="check-option"><input type="checkbox" checked={productScopeIds.includes(scope.id)} onChange={(event) => setProductScopeIds((current) => event.target.checked ? [...current, scope.id] : current.filter((id) => id !== scope.id))} /><span><strong>{scope.name}</strong><small>Owner-supplied boundary context: {scope.boundaryName}. This is not compliance proof.</small></span></label>)}{!productScopeIds.length ? <small className="product-scope-error">Select Government, Defense, or both before creating a batch.</small> : null}</fieldset>
           <label className="folder-picker"><FolderOpen size={18} /><span><strong>{files.length ? `${files.length.toLocaleString()} supported files selected` : "Choose folder"}</strong><small>{files.length ? `${formatBytes(totalSelectedBytes)} · .json and .csv only` : "The raw files upload directly from your browser to S3"}</small></span><input ref={directoryInput} type="file" multiple accept=".json,.csv,application/json,text/csv" onChange={(event) => chooseFiles(event.target.files)} disabled={busy} /></label>
           <label className="ingestion-file-fallback"><span>Folder selection unavailable?</span><input ref={fileInput} type="file" multiple accept=".json,.csv,application/json,text/csv" onChange={(event) => chooseFiles(event.target.files)} disabled={busy} />Choose individual files</label>
           <div className="ingestion-options">
@@ -413,7 +429,7 @@ export function IngestionWorkspace({ operatorReady }: { operatorReady: boolean }
           {!dryRun && authoritativeSnapshot ? <label className="authoritative-confirmation">Type <code>{sourceCollection}</code> to confirm the collection is complete.<input value={authoritativeConfirmation} onChange={(event) => setAuthoritativeConfirmation(event.target.value)} disabled={busy} /></label> : null}
           {busy && <div className="pipeline-progress" aria-live="polite"><div><span>{progress.message}</span><strong>{pipelinePercent}%</strong></div><div className="progress-track"><div className="progress-fill" style={{ width: `${pipelinePercent}%` }} /></div></div>}
           {!operatorReady && <p className="ingestion-operator-note"><AlertTriangle size={14} />A provisioned OIDC administrator is required to start cloud ingestion. Local development can inspect job history and results.</p>}
-          <button className="primary-button ingestion-start" onClick={() => void startIngestion()} disabled={busy || !files.length || !operatorReady}><UploadCloud size={16} />{dryRun ? "Upload and start dry run" : "Upload and ingest"}</button>
+          <button className="primary-button ingestion-start" onClick={() => void startIngestion()} disabled={busy || !files.length || !productScopeIds.length || !operatorReady}><UploadCloud size={16} />{dryRun ? "Upload and start dry run" : "Upload and ingest"}</button>
           <p className="ingestion-safety"><FileArchive size={14} />Raw corpus files are temporary S3 objects. They do not pass through FastAPI and are not stored in Git.</p>
         </div>
       </Card>
@@ -425,12 +441,14 @@ export function IngestionWorkspace({ operatorReady }: { operatorReady: boolean }
           {!loadingJobs && !batches.length && <div className="ingestion-empty"><FileArchive size={20} /><p>No ingestion jobs yet.</p></div>}
           {batches.map((batch) => <button key={batch.id} className={`job-list-item${selectedBatchId === batch.id ? " job-list-item-active" : ""}`} onClick={() => setSelectedBatchId(batch.id)}>
             <span className="job-state"><Badge tone={statusTone(batch.state)}>{batch.state}</Badge><small>{formatTime(batch.created_at)}</small></span>
-            <span className="job-copy"><strong>{batch.source_collection}</strong><small>{batch.expected_file_count.toLocaleString()} files · {formatBytes(batch.expected_total_bytes)} · {batch.dry_run ? "dry run" : "catalog update"}</small></span>
+            <span className="job-copy"><strong>{batch.source_collection}</strong><small>{productScopeLabel(batch.product_scope_ids)} · {batch.expected_file_count.toLocaleString()} files · {formatBytes(batch.expected_total_bytes)} · {batch.dry_run ? "dry run" : "catalog update"}</small></span>
             <ChevronRight size={17} />
           </button>)}
         </div>
       </Card>
     </div>
+
+    {confirmIngestion ? <MappingDialog title={authoritativeSnapshot ? "Apply authoritative snapshot" : "Start catalog ingestion"} description={`${sourceCollection} · ${files.length.toLocaleString()} selected files · ${productScopeLabel(productScopeIds)}`} onClose={() => setConfirmIngestion(false)} actions={<><button type="button" className="admin-save" onClick={() => setConfirmIngestion(false)}>Cancel</button><button type="button" className="mapping-retire" onClick={() => void startIngestion(true)}>{authoritativeSnapshot ? "Apply snapshot" : "Upload and ingest"}</button></>}><div className="mapping-editor"><p>{authoritativeSnapshot ? "Paths absent from this complete manifest will be marked historical." : "This run will update catalog data after checksum validation."}</p></div></MappingDialog> : null}
 
     {selectedBatch && <Card className="ingestion-detail-card">
       <div className="card-heading ingestion-detail-heading"><div><p className="eyebrow">Selected job</p><h3>{selectedBatch.source_collection}</h3><code>{selectedBatch.id}</code></div><div className="heading-actions"><Badge tone={selectedBatch.dry_run ? "info" : "warning"}>{selectedBatch.dry_run ? "Dry run" : "Catalog update"}</Badge><Badge tone={statusTone(selectedBatch.state)}>{selectedBatch.state}</Badge><button className="icon-button" aria-label="Refresh selected job" onClick={() => void loadBatch(selectedBatch.id)} disabled={loadingDetail}><RefreshCw size={15} className={loadingDetail ? "spin" : ""} /></button></div></div>

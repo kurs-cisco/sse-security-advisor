@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { fetchJson, type ApiPage } from "@/app/lib/http";
+import { addScope, type AssignedScopePair } from "@/app/lib/scope";
 import { serviceGroupDisplayName, serviceGroupFromReference } from "@/app/lib/utils";
 import type { InventoryStatus, LibraryInventory, ServiceGroupInventory, ServiceInventory } from "@/components/inventory/types";
 
@@ -20,6 +21,7 @@ type ApiGroup = {
   candidate_crypto_assets?: number;
   candidate_crypto_libraries?: number;
 };
+type PortfolioGroup = ApiGroup & { crypto_component_occurrences: number };
 type ApiDocument = { document_id: number; sha256: string; document_kind: string; format_name: string; spec_version: string; generated_at_text: string | null; service_groups: string[]; source_paths: string[]; crypto_component_occurrences?: number; unique_crypto_libraries?: number };
 type ApiComponent = { component_id: number; name: string; version: string | null; canonical_purl: string | null; document_count: number; occurrence_count?: number; service_groups: string[] };
 
@@ -77,10 +79,31 @@ function mapLibrary(component: ApiComponent): LibraryInventory {
 }
 
 /** Uses deployed FastAPI endpoints and never substitutes demo inventory on request failure. */
-export async function getInventorySnapshot(): Promise<InventorySnapshot> {
+export async function getInventorySnapshot(scope?: AssignedScopePair): Promise<InventorySnapshot> {
   try {
-    const register = await fetchJson<ApiPage<ApiGroup>>("/api/v1/inventory/service-groups?limit=250&sort=service_group&direction=asc");
-    return { groups: mapGroups(register.items ?? []), source: "api" };
+    if (!scope) {
+      const register = await fetchJson<ApiPage<PortfolioGroup>>(
+        "/api/v1/inventory/service-groups?limit=250&offset=0&sort=service_group&direction=asc",
+      );
+      if (register.total > register.items.length) {
+        throw new Error("The portfolio service-group register exceeded one page");
+      }
+      return { groups: mapGroups(register.items), source: "api" };
+    }
+    const params = addScope(new URLSearchParams({ limit: "250", offset: "0", sort: "document_id", direction: "asc" }), scope);
+    const documents = await fetchJson<ApiPage<ApiDocument>>(`/api/v1/inventory/documents?${params}`);
+    const rows = documents.items ?? [];
+    const group = {
+      service_group: scope.serviceGroup,
+      display_name: scope.serviceGroup,
+      source_files: rows.length,
+      documents: documents.total,
+      coverage_gap_count: 0,
+      ingest_issues: 0,
+      crypto_component_occurrences: rows.reduce((total, row) => total + (row.crypto_component_occurrences ?? 0), 0),
+      candidate_crypto_libraries: rows.reduce((total, row) => total + (row.unique_crypto_libraries ?? 0), 0),
+    };
+    return { groups: mapGroups([group]), source: "api" };
   } catch (error) {
     return {
       groups: [],
@@ -91,10 +114,11 @@ export async function getInventorySnapshot(): Promise<InventorySnapshot> {
 }
 
 export type InventoryPage<T> = { rows: T[]; total: number };
-export type PageQuery = { page: number; pageSize: number; query: string; sort?: string; direction?: "asc" | "desc"; signal?: AbortSignal };
+export type PageQuery = { page: number; pageSize: number; query: string; scope?: AssignedScopePair; sort?: string; direction?: "asc" | "desc"; signal?: AbortSignal };
 
 export async function getServicePage(options: PageQuery): Promise<InventoryPage<ServiceInventory>> {
   const params = new URLSearchParams({ limit: String(options.pageSize), offset: String(options.page * options.pageSize), sort: options.sort ?? "document_id", direction: options.direction ?? "asc" });
+  if (options.scope) addScope(params, options.scope);
   if (options.query.trim()) params.set("query", options.query.trim());
   const result = await fetchJson<ApiPage<ApiDocument>>(`/api/v1/inventory/documents?${params}`, { signal: options.signal, dedupe: false });
   return { rows: result.items.map(mapDocument), total: result.total };
@@ -102,28 +126,29 @@ export async function getServicePage(options: PageQuery): Promise<InventoryPage<
 
 export async function getLibraryPage(options: PageQuery): Promise<InventoryPage<LibraryInventory>> {
   const params = new URLSearchParams({ limit: String(options.pageSize), offset: String(options.page * options.pageSize), sort: options.sort ?? "document_count", direction: options.direction ?? "desc" });
+  if (options.scope) addScope(params, options.scope);
   if (options.query.trim()) params.set("query", options.query.trim());
   const result = await fetchJson<ApiPage<ApiComponent>>(`/api/v1/inventory/libraries?${params}`, { signal: options.signal, dedupe: false });
   return { rows: result.items.map(mapLibrary), total: result.total };
 }
 
-export function useInventorySnapshot() {
+export function useInventorySnapshot(scope?: AssignedScopePair) {
   const [snapshot, setSnapshot] = React.useState<InventorySnapshot>({ groups: [], source: "unavailable", error: "Catalog request has not completed" });
   const [loading, setLoading] = React.useState(true);
   const reload = React.useCallback(async () => {
     setLoading(true);
-    const next = await getInventorySnapshot();
+    const next = await getInventorySnapshot(scope);
     setSnapshot(next);
     setLoading(false);
-  }, []);
+  }, [scope]);
   React.useEffect(() => {
     let active = true;
-    void getInventorySnapshot().then((next) => {
+    void getInventorySnapshot(scope).then((next) => {
       if (!active) return;
       setSnapshot(next);
       setLoading(false);
     });
     return () => { active = false; };
-  }, []);
+  }, [scope]);
   return { ...snapshot, loading, reload };
 }

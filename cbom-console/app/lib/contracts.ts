@@ -56,3 +56,42 @@ export type OverviewResponse = {
   }>;
   service_groups: ServiceGroupSummary[];
 };
+
+/** The API, rather than the browser, determines effective authorization. */
+export type EffectiveAccessGrant = {
+  source_collection: string;
+  service_group: string;
+  product_scope_id: "secure-access-government" | "secure-access-defense";
+  boundary_name: "FedRAMP High/IL2" | "IL5";
+  assessment_authorization_reference?: string;
+  ato_boundary: string | null;
+  access: "lead" | "engineer";
+};
+
+export type EffectiveAccess = {
+  policy_version: string;
+  group_fingerprint: string | null;
+  effective_role: "admin" | "lead" | "engineer" | "summary" | "none";
+  summary_access: boolean;
+  grants: EffectiveAccessGrant[];
+  revoked: boolean;
+  matched_groups?: string[];
+  /** Exact mode identifiers returned by the API for this verified identity. */
+  available_modes?: AccessMode[];
+  /** Strongest verified mode; shown until the user chooses a different allowed mode. */
+  default_mode?: AccessMode;
+  /** Mode applied by the API for this request. It is never inferred by the browser. */
+  active_mode?: AccessMode;
+};
+
+export type AccessMode = "admin" | "product_lead" | "product_engineer" | "summary";
+
+export type AuthMeResponse = {
+  kind: string;
+  email: string | null;
+  display_name: string | null;
+  role?: string;
+  can_edit?: boolean;
+  capabilities?: { roster_revoke_restore?: boolean; operational_evidence_notes?: boolean; review_proposals?: boolean };
+  access?: EffectiveAccess;
+};

@@ -112,6 +112,7 @@ export function InventoryDataTable<TData>({
                       <button
                         type="button"
                         className="inline-flex items-center gap-1 transition hover:text-foreground"
+                        aria-label={`${String(header.column.columnDef.header)}. ${header.column.getIsSorted() === "asc" ? "Sorted ascending" : header.column.getIsSorted() === "desc" ? "Sorted descending" : "Sort"}`}
                         onClick={header.column.getToggleSortingHandler()}
                       >
                         {flexRender(header.column.columnDef.header, header.getContext())}
@@ -138,7 +139,7 @@ export function InventoryDataTable<TData>({
       </div>
       <div className="flex flex-col gap-3 border-t border-border/70 px-4 py-3 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2">Rows <select aria-label="Rows per page" className="rounded-md border border-border bg-background px-2 py-1 text-foreground" value={effectivePagination.pageSize} onChange={(e) => table.setPageSize(Number(e.target.value))}>{[8, 16, 32].map((size) => <option key={size}>{size}</option>)}</select></div>
-        <div className="flex items-center gap-2"><span aria-live="polite">{loading && visibleRows.length ? "Updating · " : ""}{visibleRows.length ? `${effectivePagination.pageIndex * effectivePagination.pageSize + 1}–${Math.min(effectivePagination.pageIndex * effectivePagination.pageSize + visibleRows.length, total)} of ${total}` : "0 records"}</span><button aria-label="Previous page" className="rounded-md border border-border p-1 disabled:opacity-40" onClick={() => table.previousPage()} disabled={loading || !table.getCanPreviousPage()}><ChevronLeft className="size-4" /></button><button aria-label="Next page" className="rounded-md border border-border p-1 disabled:opacity-40" onClick={() => table.nextPage()} disabled={loading || !table.getCanNextPage()}><ChevronRight className="size-4" /></button></div>
+        <div className="flex items-center gap-2"><span aria-live="polite">{loading && visibleRows.length ? "Updating · " : ""}{visibleRows.length ? `${effectivePagination.pageIndex * effectivePagination.pageSize + 1}–${Math.min(effectivePagination.pageIndex * effectivePagination.pageSize + visibleRows.length, total)} of ${total}` : "0 records"}</span><button type="button" aria-label="Previous page" className="rounded-md border border-border p-1 disabled:opacity-40" onClick={() => table.previousPage()} disabled={loading || !table.getCanPreviousPage()}><ChevronLeft className="size-4" /></button><button type="button" aria-label="Next page" className="rounded-md border border-border p-1 disabled:opacity-40" onClick={() => table.nextPage()} disabled={loading || !table.getCanNextPage()}><ChevronRight className="size-4" /></button></div>
       </div>
     </div>
   );

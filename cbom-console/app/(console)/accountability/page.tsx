@@ -1,6 +1,6 @@
-import { ConsoleShell } from "@/app/components/console-shell";
-import { ServiceAccountability } from "@/components/accountability/service-accountability";
+import { redirect } from "next/navigation";
 
-export default function AccountabilityPage() {
-  return <ConsoleShell><div className="page-container"><ServiceAccountability /></div></ConsoleShell>;
+export default async function AccountabilityPage({ searchParams }: { searchParams: Promise<{ group?: string | string[] }> }) {
+  const group = (await searchParams).group;
+  redirect(typeof group === "string" && group ? `/service-catalog?group=${encodeURIComponent(group)}` : "/service-catalog");
 }

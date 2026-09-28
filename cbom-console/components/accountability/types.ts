@@ -225,5 +225,5 @@ export type ServiceGroupDetail = {
     portfolio_poam_items: PortfolioPoam[];
     disclaimer: string;
   };
-  candidate_only: true;
+  candidate_only: boolean;
 };

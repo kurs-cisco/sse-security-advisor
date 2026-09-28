@@ -13,9 +13,11 @@ API directly. The proxy can attach an internal bearer token at runtime.
 - **Inventory** — accessible service-group heatmap/table, service evidence
   records with full SHA-256 provenance, per-document component drill-ins, and
   explicitly classified library usage with a service-usage drill-in.
-- **Accountability** — owner-grouped service register with lead, IL2/IL5
-  planning, CBOM links, crypto inventory, findings, draft POA&M mapping, and a
-  service detail drawer.
+- **Service Catalog** — managed service-group names, ownership, optional user
+  profiles, IL2/IL5 plans, impact risk, comments, and operational attributes.
+  Admins publish changes directly; assigned leads propose changes for a
+  different Admin to approve; engineers read approved records. Existing source
+  evidence remains available in the Admin service detail drawer.
 - **POA&M** — draft FIPS 140-3 candidate register, Team Tracker owner/lead and
   IL2/IL5 planning data, expandable evidence/remediation details, asset and
   workstream CSV exports, and a compliance ZIP.
@@ -34,7 +36,7 @@ or runtime-mode signal as proof of CMVP validation or FedRAMP compliance.
 
 ```bash
 npm ci
-CBOM_AUTH_MODE=dev CBOM_API_ORIGIN=http://127.0.0.1:8000 npm run dev
+CBOM_AUTH_MODE=local-admin CBOM_ENVIRONMENT=local CBOM_API_ORIGIN=http://127.0.0.1:8000 npm run dev -- --hostname 127.0.0.1
 ```
 
 Open <http://127.0.0.1:3000> and select **Continue in local development**. This
@@ -42,8 +44,8 @@ sets an HTTP-only cookie and does not create identity claims. If the API cannot 
 unavailable state; the console never substitutes preview records for live data.
 
 The Docker Compose stack uses a production-built Next.js image on a loopback-only
-port, so it explicitly sets `CBOM_ALLOW_INSECURE_DEV_AUTH=true`. Never carry that
-override into a cloud deployment.
+port. Its explicit `local-admin` mode requires `CBOM_ENVIRONMENT=local` and a
+loopback request host. Cloud tasks use `alb-oidc` and cannot use the local login.
 
 Inventory and POA&M tables use server-side filtering and pagination. Requests
 are bounded by a 25-second client timeout, stale searches are cancelled, and

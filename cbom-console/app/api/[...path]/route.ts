@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { verifyAlbOidcToken } from "@/app/lib/alb-oidc";
+import { forwardedClientHeaders } from "@/app/lib/api-proxy-headers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,15 +11,7 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   const { path } = await context.params;
   const origin = (process.env.CBOM_API_ORIGIN ?? "http://127.0.0.1:8000").replace(/\/$/, "");
   const target = new URL(`/api/${path.map(encodeURIComponent).join("/")}${request.nextUrl.search}`, origin);
-  const headers = new Headers();
-  // This route is a JSON body proxy, not a browser cache. Do not forward
-  // If-None-Match: an upstream 304 has no body and the client cannot reconstruct
-  // the prior response across server instances or deployments.
-  for (const name of ["accept", "content-type", "x-request-id"]) {
-    const value = request.headers.get(name);
-    if (value) headers.set(name, value);
-  }
-  headers.set("accept-encoding", "identity");
+  const headers = forwardedClientHeaders(request.headers);
   const token = process.env.CBOM_API_BEARER_TOKEN;
   if (token) headers.set("authorization", `Bearer ${token}`);
   const oidcToken = request.headers.get("x-amzn-oidc-data");
@@ -31,6 +24,11 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
     headers.set("x-cbom-user-email", verification.identity.email);
     headers.set("x-cbom-user-issuer", process.env.CBOM_OIDC_ISSUER ?? "");
     if (verification.identity.name) headers.set("x-cbom-user-name", verification.identity.name);
+    // Forward the exact, already signature-verified entitlement values. The
+    // catalog API owns group-to-capability mapping; this proxy must not infer
+    // permissions from a prefix or collapse multi-service memberships.
+    headers.set("x-cbom-user-groups", JSON.stringify(verification.identity.groups));
+    headers.set("x-cbom-user-groups-claim-type", verification.identity.groupsClaimType);
   }
 
   try {

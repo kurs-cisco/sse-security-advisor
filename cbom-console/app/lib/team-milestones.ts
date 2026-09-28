@@ -1,4 +1,5 @@
 import { fetchJson } from "@/app/lib/http";
+import { addScope, type AssignedScopePair } from "@/app/lib/scope";
 
 export type TrackerMilestone = {
   label: "IL2" | "IL5";
@@ -229,7 +230,59 @@ export type CoverageGap = {
   };
 };
 
+/** Review-only output may contain more evidence detail than a coverage request. */
+export type AnalystObservation = {
+  observation_id: string;
+  assertion_state?: string;
+  title: string;
+  technical_observation?: string;
+  scope?: { source_collection?: string; service_groups?: string[]; ato_boundary?: string | null };
+  missing_required_facts?: string[];
+  evidence?: unknown[];
+  limitations?: string[];
+};
+
 export type PoamAssessment = {
+  /** Additive API metadata; the console makes absence visible rather than inferring it. */
+  policy?: {
+    policy_version?: string;
+    assessor_version?: string;
+    assessment_date?: string;
+    assessment_as_of?: string;
+    assessment_timezone?: string;
+    authoritative_sources?: Array<{ title?: string; url?: string; retrieved_on?: string }>;
+  };
+  scope?: { source_collection?: string | null; service_group?: string | string[] | null };
+  assessment_contract?: {
+    complete?: boolean;
+    missing_required_facts?: string[];
+    fingerprint?: string;
+    reporting_profile?: string;
+    authority_register_path?: string;
+    authority_register_sha256?: string;
+    authority_retrieved_on?: string;
+    authority_freshness_state?: "reviewed_for_assessment" | "incomplete";
+    authority_freshness_review?: {
+      reviewed_at?: string;
+      reviewed_by?: string;
+      reference?: string;
+      sha256?: string;
+    };
+  };
+  assessment_run?: {
+    assessment_run_id?: string;
+    assessment_as_of?: string;
+    authority_register?: { path?: string; sha256?: string; retrieved_at?: string };
+    authority_freshness_review?: {
+      reviewed_at?: string;
+      reviewed_by?: string;
+      reference?: string;
+      sha256?: string;
+    };
+  };
+  assessment_run_id?: string;
+  assessment_run_eligibility?: boolean;
+  analyst_observations?: AnalystObservation[];
   poam_items: PoamCandidate[];
   poam_workstreams?: PoamWorkstream[];
   portfolio_poam_items?: PortfolioPoam[];
@@ -252,6 +305,16 @@ export type PoamAssessment = {
     proposed_remediation_workstreams?: number;
     portfolio_poam_candidates?: number;
   };
+  summary_metric_metadata?: Record<string, {
+    label: string;
+    unit: string;
+    interpretation: string;
+  }>;
+  coverage_metric_metadata?: Record<string, {
+    label: string;
+    unit: string;
+    interpretation: string;
+  }>;
   poam_page?: { total: number; limit: number; offset: number };
 };
 
@@ -292,17 +355,21 @@ async function fetchLive<T>(path: string, label: string, signal?: AbortSignal): 
 }
 
 /** Never substitutes demo records for an unavailable assessment endpoint. */
-export function getPoamAssessment(options: { page?: number; pageSize?: number; query?: string; signal?: AbortSignal } = {}): Promise<LiveResult<PoamAssessment>> {
+export function getPoamAssessment(options: { page?: number; pageSize?: number; query?: string; scope?: AssignedScopePair; signal?: AbortSignal }): Promise<LiveResult<PoamAssessment>> {
   const pageSize = options.pageSize ?? 20;
   const params = new URLSearchParams({
     poam_limit: String(pageSize),
     poam_offset: String((options.page ?? 0) * pageSize),
   });
+  if (options.scope) addScope(params, options.scope);
   if (options.query?.trim()) params.set("query", options.query.trim());
   return fetchLive<PoamAssessment>(`/api/v1/fips/assessment?${params}`, "Catalog API", options.signal);
 }
 
-/** Never substitutes demo team data for an unavailable milestone endpoint. */
-export function getTeamMilestones(signal?: AbortSignal): Promise<LiveResult<TeamMilestones>> {
-  return fetchLive<TeamMilestones>("/api/v1/fips/team-milestones", "Team Tracker API", signal);
+/** Planning is portfolio-only until imports carry source collection provenance. */
+export function getTeamMilestones(scope?: AssignedScopePair): Promise<LiveResult<TeamMilestones>> {
+  if (scope) return Promise.resolve({ source: "unavailable", data: null, error: "Team Tracker data lacks source collection provenance for the selected pair" });
+  return fetchLive<TeamMilestones>("/api/v1/fips/team-milestones", "Catalog API");
 }
+
+/** Never substitutes demo team data for an unavailable milestone endpoint. */
