@@ -33,7 +33,7 @@
       "us-gov-east-1b",
       "us-gov-east-1c"
     ],
-    "imageTag": "deploy-20260930-16",
+    "imageTag": "deploy-20260930-17",
     "oidcClientId": "DIIYIKV2YSWCYEYECY3L",
     "oidcGroupScope": {
       "version": "2026-09-27.2",
