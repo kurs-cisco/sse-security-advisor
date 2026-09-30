@@ -126,11 +126,10 @@ The `cbom-workbench-dev` CloudFormation stack is deployed in account
 `135124134289`, region `us-gov-east-1`, with termination protection enabled.
 Runtime image digests, applied migration state, reconciliation results, and
 browser verification are release evidence rather than durable configuration.
-The latest reviewed values are recorded in
-[CHANGE_RECORD_2026-09-28_UI_UX_ROLLOUT.md](CHANGE_RECORD_2026-09-28_UI_UX_ROLLOUT.md).
 Query the running stack and catalog before a later rollout; do not use a
 previous release's image tag, counts, candidate totals, or migration level as
-current state.
+current state. Follow [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) to record
+the current verification.
 
 The application hostname is `https://cbom.swg.dev-umbrellagov.com/`; the scoped
 automation endpoint is `https://api.cbom.swg.dev-umbrellagov.com/`. The IdP
@@ -155,9 +154,6 @@ matches exact `fedsse-` group names against the deployment-owned policy;
 deployed ALB. Keep the MyID `groups` claim and restrict its group selector to
 the `fedsse-` prefix so unrelated memberships do not enlarge UserInfo.
 
-The temporary OIDC claim diagnostics were removed after the direct MyID
-UserInfo and fresh CBOM login confirmed the administrator entitlement. The
-[product cleanup change record](CHANGE_RECORD_2026-09-27_OIDC_PRODUCT_CLEANUP.md)
-records the deployment and remaining access gate. The earlier diagnostic
-deployment record remains historical audit evidence. Do not record raw claims, browser
-cookies, authorization codes, or tokens in source control.
+Temporary OIDC claim diagnostics were removed after direct MyID UserInfo and a
+fresh CBOM login confirmed the administrator entitlement. Do not record raw
+claims, browser cookies, authorization codes, or tokens in source control.

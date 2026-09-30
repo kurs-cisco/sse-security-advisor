@@ -183,3 +183,15 @@ checksum-verification errors, `ingest_issue` counts, temporary-object growth,
 API latency, long recursive queries, and autovacuum health. The `/healthz`
 endpoint checks database connectivity; `/api/v1/stats` provides catalog-level
 counts.
+
+## Shared dashboard projections
+
+Overview and the Risk Assessment Planning and Team milestones views are
+read-only portfolio projections for signed dashboard roles. Planning derives
+its current dates and impact counts from the Service Catalog; approved changes
+appear after a new request or page Refresh. The API serializes managed
+PostgreSQL dates as ISO strings. Summary responses contain aggregate counts
+without service, document, component, or library identifiers. A failed refresh
+must show a retry state rather than stale counts or a raw upstream error.
+Service Catalog management, raw tracker, evidence detail, candidates, and
+exports retain their separate authorization gates.

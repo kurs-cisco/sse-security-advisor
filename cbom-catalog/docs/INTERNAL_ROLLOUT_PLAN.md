@@ -57,11 +57,9 @@ keeps roster changes, evidence observations, strict proposals, FIPS detail,
 candidate exports, and reporting output closed until their independent gates
 are complete.
 
-The [Admin mapping deployment record](CHANGE_RECORD_2026-09-27_ADMIN_GROUP_MAPPING.md)
-and [product-detail activation record](CHANGE_RECORD_2026-09-27_PRODUCT_DETAIL_ACTIVATION.md)
-preserve the dated deployment and signed-browser evidence. The
-[UI/UX rollout record](CHANGE_RECORD_2026-09-28_UI_UX_ROLLOUT.md) identifies
-the latest reviewed source snapshot and deployed image artifacts.
+Use [CLOUD_AUTH_AND_DEPLOYMENT.md](CLOUD_AUTH_AND_DEPLOYMENT.md) for the
+deployment boundary and [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for the
+required verification of the running stack and source snapshot.
 
 ## Decisions required before service-team rollout
 

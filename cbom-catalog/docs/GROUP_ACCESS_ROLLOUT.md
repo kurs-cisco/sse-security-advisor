@@ -1,14 +1,16 @@
 # OIDC group access rollout
 
-Status: **read-only, product-scoped catalog evidence is enabled; roster actions
-and operational notes remain disabled**. FIPS detail, candidate output, and
+Status: **product-scoped catalog evidence and Service Catalog management are
+enabled; access-roster actions, operational evidence notes, and separate
+evidence-review proposals remain disabled**. FIPS detail, candidate output, and
 exports remain closed by their separate product-contract gate. The synthesized
 baseline policy version `2026-09-27.2` contains 83 exact entries: three global
 groups and 80 generated service Lead and Engineer groups. A signed Admin
 mapping revision supersedes that baseline; a missing, corrupt, or ambiguous
 active revision fails closed. `enableOidcServiceGroups`,
-`enableProductScopedDetailEvidence`, and `enableAdminGroupMapping` are enabled;
-`enableAccessRoster` and `enableOperationalEvidenceNotes` are disabled.
+`enableProductScopedDetailEvidence`, `enableAdminGroupMapping`, and
+`enableServiceCatalog` are enabled; `enableAccessRoster`,
+`enableLeadReviewProposals`, and `enableOperationalEvidenceNotes` are disabled.
 
 The 40 collection/service-group pairs are registered in
 `infra/lib/oidc-service-groups.ts`, including five retained zero-evidence
@@ -24,19 +26,12 @@ it does not establish compliance, validation, authorization, product evidence,
 FIPS evidence, or absence of risk. Operational notes remain separate from
 assessment and POA&M results.
 
-For dated migration, deployment, and browser-verification evidence, use the
-[migration 016 record](CHANGE_RECORD_2026-09-25_MIGRATION_016.md),
-[routing record](CHANGE_RECORD_2026-09-26_DUAL_PRODUCT_ROUTING.md),
-[operational-access schema record](CHANGE_RECORD_2026-09-26_OPERATIONAL_ACCESS_SCHEMA.md),
-[mapping deployment record](CHANGE_RECORD_2026-09-27_ADMIN_GROUP_MAPPING.md),
-and [product-detail activation record](CHANGE_RECORD_2026-09-27_PRODUCT_DETAIL_ACTIVATION.md).
-
 ## Approved policy shape
 
 | Exact verified group | Portfolio Overview and POA&M | Service detail | Write |
 | --- | --- | --- | --- |
-| `fedsse-admins` | Full | All configured services and Admin | Administrative actions |
-| `fedsse-<registered-key>-leads` | Aggregates and read-only Planning/Team milestones | Read-only catalog detail when the exact collection, service group, product context, and current-file routing all match; Reviews remains grant-only | Proposed operational writes require a later gate and another admin's decision; no authored-data edit |
+| `fedsse-admins` | Full | All configured services and Admin | Create or publish Service Catalog metadata; decide Service Catalog proposals. Access-roster, operational evidence, and separate evidence-review actions are disabled. |
+| `fedsse-<registered-key>-leads` | Aggregates and read-only Planning/Team milestones | Read-only catalog detail when the exact collection, service group, product context, and current-file routing all match; Reviews remains grant-only | Submit an exact-scope Service Catalog metadata proposal for a different Administrator's decision. Separate operational evidence-review proposals are disabled. |
 | `fedsse-<registered-key>-engineers` | Aggregates and read-only Planning/Team milestones | Read-only catalog detail when the exact collection, service group, product context, and current-file routing all match; Reviews remains grant-only | None |
 | `fedsse-external` | Aggregates and read-only Planning/Team milestones | None | None |
 | `fedsse-scr2-leads` | Aggregates and read-only Planning/Team milestones | None until separately mapped | None until separately mapped |
@@ -70,6 +65,20 @@ registered MyID stems and exact API keys. A user receives only entries present
 in their verified claim; the 83-entry policy does not grant all 40 services to
 every user.
 
+## OIDC claim contract
+
+The cloud ALB requests `openid email groups`. The Next.js server verifies the
+ALB-signed identity and FastAPI authorizes only the verified `groups` array.
+The parser accepts a valid bounded claim, ignores unrelated groups, and rejects
+malformed `fedsse-` values. It never normalizes group names. `fedsse-admins`
+takes precedence over Summary and service roles when a verified claim contains
+more than one recognized group.
+
+Use the MyID `groups` claim with a `fedsse-` selector or exact allowlist. The
+custom `memberships` claim is not an application authorization input and should
+not be requested through the ALB. A persisted roster record or an email address
+does not grant cloud access.
+
 ## Admin access roster and local mode
 
 Cloud human permissions come only from verified OIDC groups. The legacy
@@ -90,7 +99,22 @@ web and API ports bind to loopback. The browser login has one local admin
 identity, and cloud ECS tasks remain `alb-oidc` plus bearer-only API. No local
 login or legacy database-admin fallback is allowed in cloud.
 
-## Operational review and observation records
+## Service Catalog control plane
+
+The Service Catalog is a separate control plane from source evidence and group
+policy. An Administrator may create or publish managed service metadata. A
+Product Lead may propose a change only for an exact granted service group and
+its required product context; a different Administrator approves or rejects the
+proposal with a reason. Product Engineers are read-only, and Summary users
+cannot enumerate the catalog. Profile links for an owner or lead are optional
+metadata and never create access grants.
+
+Managed changes use optimistic revisions, append-only snapshots, and audit
+events. They may override imported operational fields after approval, including
+an intentional clear, while source identities, routing, checksums, planning
+imports, and assessment evidence remain immutable.
+
+## Separate operational review and observation records
 
 Migrations 016, 018, and 020 keep operational review material in append-only
 `app_auth` tables. Migration 018 requires an exact product scope and immutable
@@ -101,12 +125,11 @@ POA&M, planning record, source file, or `admin_overlay` entry. This permits a
 lead to submit a bounded evidence observation for their granted service and an
 independent administrator to accept or reject that operational record.
 
-All of those tables are empty in the verified development database. The
-observation and strict-proposal endpoints remain capability-disabled until the
-final application and role tests complete. `can_edit` remains administrator-only
-for existing edit endpoints.
+These evidence-observation and strict-proposal endpoints remain
+capability-disabled. They are separate from the enabled Service Catalog
+metadata workflow and do not alter its approval model.
 
-## Remaining gates before operational writes or gated assessment outputs
+## Remaining gates for separate operational writes and assessment outputs
 
 Migration 021 stores append-only policy revisions and an active pointer in
 `app_auth`; the deployed registry remains the seed until a signed human

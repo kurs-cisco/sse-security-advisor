@@ -82,6 +82,30 @@ download to ephemeral storage and revalidate bytes before parsing. Shared
 catalog snapshots exclude all of `app_auth`, so identities, credentials,
 overlays, audit events, and ingestion-job metadata remain environment-local.
 
+## Service Catalog control plane
+
+The Service Catalog is an operational projection keyed by
+`(source_collection, service_group)`. Its immutable scope identity is the
+collection-qualified service-group slug. Managed display metadata may include a
+display name, owner or lead profile link, IL2/IL5 planning dates and status,
+impact risk, comments, and approved crypto-module plan. An optional profile
+link is reference data only; it does not create an application entitlement.
+
+Managed metadata is versioned in private `app_auth` tables. An Administrator
+may publish a new revision, and a Product Lead may submit an exact-scope
+proposal for an independent Administrator decision. Snapshots and audit events
+are append-only. Snapshot JSON uses ISO strings for dates and timestamps so the
+same revision is serializable through the API. An explicit approved clear
+overrides an imported value; omitted fields continue to inherit the imported
+value. No managed revision rewrites source-file identity, checksum, normalized
+evidence, routing attribution, or imported planning records.
+
+An approved crypto-module plan identifies a current module/version, optional
+immutable imported target row, and one versioned public reference or a custom
+module/version with supporting HTTPS evidence. The plan is an operational
+overlay. It is not proof of deployed use, CMVP validation, approved mode, or
+ATO applicability.
+
 ## Canonical component identity
 
 Identity preference is:

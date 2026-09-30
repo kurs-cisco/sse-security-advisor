@@ -149,6 +149,22 @@ version/build, CMVP certificate and security policy, cryptographic boundary,
 operational environment, deployed artifact digest, approved configuration/mode,
 runtime evidence, ATO-boundary linkage, and authorized review.
 
+### Target-module planning evidence
+
+Service Catalog target-module plans preserve a team assertion separately from
+public evidence. A selected certificate or vendor lifecycle reference must
+match the exact module identity and version. A matching version does not prove
+the deployed provider, artifact digest, cryptographic boundary, operational
+environment, approved mode, or ATO deployment. Vendor pipeline statements are
+pipeline evidence, not certificates. A custom target remains user asserted
+until independently reviewed. Generic language or package names are not CMVP
+module identities; the underlying cryptographic provider must be identified.
+
+When the public-evidence import changes, a saved plan may remain visible, but
+its evidence disposition is unverified until reviewed again. Exact matching
+does not permit a patch, build suffix, or neighboring version to inherit a
+certificate or pipeline state.
+
 Evidence is partitioned by document-level subject or component occurrence before
 classification. Assertions about two different component boundaries are not
 collapsed into a false conflict. When positive and negative evidence does

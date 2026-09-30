@@ -40,38 +40,11 @@
   is the retained validation record for the earlier 2026-09-17 source snapshot;
   it is not the current baseline.
 
-## Historical change records
-
-The `CHANGE_RECORD_*.md` files are immutable operational provenance: they record
-the particular migration, deployment artifact, verification result, and known
-limitations at the time of a release. They are not current-state runbooks.
-Use the durable documents above for operating instructions, and the change
-records for evidence about a dated event:
-
-- Schema and routing: [migration 016](CHANGE_RECORD_2026-09-25_MIGRATION_016.md),
-  [dual-product routing](CHANGE_RECORD_2026-09-26_DUAL_PRODUCT_ROUTING.md), and
-  [operational-access schema](CHANGE_RECORD_2026-09-26_OPERATIONAL_ACCESS_SCHEMA.md).
-- OIDC and scoped access: [diagnostic deployment](CHANGE_RECORD_2026-09-26_OIDC_DIAGNOSTIC_DEPLOYMENT.md),
-  [product cleanup](CHANGE_RECORD_2026-09-27_OIDC_PRODUCT_CLEANUP.md),
-  [metadata-only release](CHANGE_RECORD_2026-09-27_METADATA_ONLY_ACCESS.md),
-  [Admin mapping](CHANGE_RECORD_2026-09-27_ADMIN_GROUP_MAPPING.md), and
-  [product-detail activation](CHANGE_RECORD_2026-09-27_PRODUCT_DETAIL_ACTIVATION.md).
-- UI and deployment: [UI/access hardening](CHANGE_RECORD_2026-09-28_UI_ACCESS_HARDENING.md),
-  [mapping usability](CHANGE_RECORD_2026-09-28_MAPPING_USABILITY.md),
-  [workspace subtabs](CHANGE_RECORD_2026-09-28_WORKSPACE_SUBTABS.md),
-  [local/cloud deployment](CHANGE_RECORD_2026-09-28_LOCAL_CLOUD_DEPLOYMENT.md),
-  [Overview restoration](CHANGE_RECORD_2026-09-28_OVERVIEW_RESTORE.md),
-  [Service Catalog](CHANGE_RECORD_2026-09-28_SERVICE_CATALOG.md), and
-  [UI/UX rollout](CHANGE_RECORD_2026-09-28_UI_UX_ROLLOUT.md).
-- 2026-09-29 releases: [OIDC scope and workspaces](CHANGE_RECORD_2026-09-29_OIDC_SCOPE_RELEASE.md),
-  [Admin edit and review](CHANGE_RECORD_2026-09-29_ADMIN_EDIT_FIX.md),
-  [Service Catalog edit](CHANGE_RECORD_2026-09-29_CATALOG_EDIT_500_FIX.md),
-  [POA&M loading](CHANGE_RECORD_2026-09-29_POAM_LOADING_RELEASE.md), and
-  [shared POA&M planning](CHANGE_RECORD_2026-09-29_SHARED_POAM_PLANNING.md).
-- 2026-09-30 releases: [shared Planning serialization](CHANGE_RECORD_2026-09-30_SHARED_PLANNING_SERIALIZATION.md),
-  [crypto-module planning](CHANGE_RECORD_2026-09-30_CRYPTO_MODULE_PLANNING.md),
-  [POA&M impact view](CHANGE_RECORD_2026-09-30_POAM_IMPACT_VIEW.md), and
-  [Summary rendering](CHANGE_RECORD_2026-09-30_SUMMARY_RENDERING.md).
+Keep durable behavior in the current documents above. Git history records code
+changes; deployment and migration attestations belong in the organization's
+approved change-management system with its retention controls. Git history is
+not controlled assessment evidence. Do not add per-release `CHANGE_RECORD_*.md`
+files to this directory.
 
 The generated truth remains the database plus the externally retained source bytes. These
 documents describe both the pipeline and identified snapshot baselines. Refresh

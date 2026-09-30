@@ -26,6 +26,12 @@ Candidate assessments and exports require their separate assessment-contract
 gate even for an exact product grant. `invited` becomes `active` when the
 matching verified OIDC identity first signs in. Disabled identities fail closed.
 
+The ALB requests `openid email groups`; only the signature-verified `groups`
+claim is authorized. Group matching is exact and case-sensitive. A custom MyID
+`memberships` claim, stored historical role, or roster row cannot confer cloud
+access. `fedsse-admins` takes precedence when a verified claim contains more
+than one recognized mode.
+
 Migration 012 bootstraps the initial invited administrator. The invitation does
 not contain a password and cannot be claimed without the IdP's signed email
 claim. An administrator cannot demote or disable their own active account
@@ -72,10 +78,17 @@ candidate CSV export, and the candidate member of the compliance ZIP. The
 underlying assessment evidence, workstream grouping, and source hashes remain
 unchanged.
 
-The administrator page does not expose a standalone overlay editor. Overlay
-editing can be added later as contextual inline actions on the relevant tables
-and entity detail views; until then, the authenticated API remains the only
-overlay-writing surface.
+The administrator page does not expose a standalone `admin_overlay` editor.
+Those overlay writes use the authenticated API. Service Catalog metadata uses
+the separate managed-revision workflow below.
+
+Service Catalog metadata is edited contextually in the Service Catalog:
+Administrators may publish managed metadata, while Product Leads can submit an
+exact-scope proposal for a separate Administrator to approve or reject with a
+reason. Product Engineers cannot write. Each published change records an
+optimistic revision, a JSON-safe snapshot with ISO date and time values, actor,
+rationale, request ID, and before/after state. An approved intentional clear is
+distinct from an unchanged imported field.
 
 Shareable database snapshots explicitly exclude `app_auth`; they therefore do
 not distribute identities, credential digests, overlays, or access audit data.

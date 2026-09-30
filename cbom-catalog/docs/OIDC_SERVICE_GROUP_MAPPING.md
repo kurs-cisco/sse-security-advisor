@@ -111,9 +111,7 @@ The enabled product-scoped catalog-detail routes use the audited current-file
 routing decisions. Verify the literal group strings emitted in the signed
 MyID `groups` claim after the `fedsse-` filter change, then review the generated
 CDK policy and test disjoint lead, engineer, external, SCR2, and admin sessions.
-Migrations 016–020 and the routing backfill are applied and verified live; see
-the [routing change record](CHANGE_RECORD_2026-09-26_DUAL_PRODUCT_ROUTING.md)
-and [operational-access schema change record](CHANGE_RECORD_2026-09-26_OPERATIONAL_ACCESS_SCHEMA.md).
-The linked 2026-09-26 records observed zero legacy proposal, roster, and
-operational-note rows at that time; query `app_auth` for later operational state.
-That release did not change source or planning evidence.
+The routing backfill is applied under the scope and data-boundary controls in
+[DUAL_ATO_SCOPE_PLAN.md](DUAL_ATO_SCOPE_PLAN.md). Query `app_auth` for current
+operational state. Access-control work does not change source or planning
+evidence.

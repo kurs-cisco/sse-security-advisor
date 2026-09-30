@@ -72,6 +72,20 @@ The source SHA-256 values link the candidate to the immutable catalog documents.
 They support repeatability across refreshes; they do not prove a deployed
 module/certificate match.
 
+## Risk Assessment planning drafts
+
+The Risk Assessment POA&M register may show read-only planning drafts alongside
+the evidence queue. These are not approved POA&Ms, findings, CMVP validation
+conclusions, or authorization decisions. Their Critical, Moderate, Other/unset,
+and total impact values are recalculated from the current Service Catalog on
+each response. High maps to Critical and Medium maps to Moderate.
+
+Each impact value reports the number of affected service groups and distinct
+current catalog document records. It does not disclose service, owner, lead, or
+source identities in the shared projection, and a document record is not a
+unique deployed service. Refresh reloads the register and re-derives these
+counts from current catalog planning and risk fields.
+
 ## Deduplication policy
 
 The automated pass uses a deliberately provisional key: normalized gap code,

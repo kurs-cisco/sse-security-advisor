@@ -19,7 +19,9 @@ Overview puts Catalog scale first, then Review priorities. It shows service
 groups, evidence records, explicit candidate-crypto occurrences/assets, empty
 categories, pending inputs, top crypto libraries, format mix, fingerprint
 readiness, and service-group coverage. Counts describe evidence scope, not
-compliance.
+compliance. Overview is a single page; it has no subtabs. Summary users receive
+aggregate totals and allowlisted category distributions, while detailed charts
+remain limited to Administrator and exact assigned-product modes.
 
 ### Inventory
 
@@ -39,11 +41,20 @@ assertions and do not establish authorization or FIPS validation. The legacy
 `/accountability` route redirects to `/service-catalog` and preserves a group
 deep link.
 
-### POA&M
+Administrators use the Service Catalog and its Approvals workspace to manage
+and approve operational metadata. Product Leads may submit exact-scope changes
+for independent Administrator approval; Product Engineers are read-only.
+Editors open focused dialogs that preserve focus and close with Escape. The
+console forwards authorized `PUT` updates to the Service Catalog API.
 
-POA&M separates non-eligible coverage/evidence requests from technical candidate
-findings. With an incomplete assessment contract, it shows the evidence-only
-queue and withholds candidate output and exports. With a complete contract,
+### Risk Assessment
+
+Risk Assessment includes the legacy POA&M register, Planning, and Team
+milestones. Planning and Team milestones are read-only all-service views for
+every signed dashboard role. The POA&M register separates non-eligible
+coverage/evidence requests from technical candidate findings. With an
+incomplete assessment contract, it shows the evidence-only queue and withholds
+candidate output and exports. With a complete contract,
 portfolio, workstream, and asset-level views retain source, owner, milestone,
 and finding traceability. Every merge and disposition remains review-required.
 See [POAM_EXPORT.md](POAM_EXPORT.md).
@@ -54,8 +65,9 @@ See [POAM_EXPORT.md](POAM_EXPORT.md).
 |---|---|
 | Dashboard | `GET /api/v1/dashboard/overview` |
 | Documents/components/libraries | `GET /api/v1/inventory/documents`, `GET /api/v1/documents/{id}/components`, `GET /api/v1/inventory/libraries` |
-| Service Catalog | `GET /api/v1/service-catalog`; Admin writes and proposal decisions use the separately authorized `/api/v1/admin/service-catalog/*` routes |
+| Service Catalog | `GET /api/v1/service-catalog`; authorized Admin writes, Lead proposals, and Admin proposal decisions use `/api/v1/admin/service-catalog/*` routes |
 | Tracker planning metadata | `GET /api/v1/fips/team-milestones` |
+| Shared planning | `GET /api/v1/portfolio/poam-planning` |
 | Assessment | `GET /api/v1/fips/assessment` |
 | Exports | `GET /api/v1/fips/portfolio-poam.csv`, `GET /api/v1/fips/poam.csv`, `GET /api/v1/fips/poam-workstreams.csv`, `GET /api/v1/fips/compliance-package.zip` |
 

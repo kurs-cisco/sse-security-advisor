@@ -97,9 +97,9 @@ policy IDs
 `secure-access-government` and `secure-access-defense`, with display boundary
 labels `FedRAMP High/IL2` and `IL5`. The same MyID service group grants both
 product contexts. These are deployment policy identifiers and display labels;
-they are not proof of authorization. All 534 current `sse-cboms` files have
-owner-approved, exact-SHA operational routing decisions for both products;
-see the [change record](../cbom-catalog/docs/CHANGE_RECORD_2026-09-26_DUAL_PRODUCT_ROUTING.md).
+they are not proof of authorization. All current `sse-cboms` files have
+owner-approved, exact-SHA operational routing decisions for both products; see
+the [dual-product scope plan](../cbom-catalog/docs/DUAL_ATO_SCOPE_PLAN.md).
 This stage sets `enableOidcServiceGroups=true`,
 `enableAdminGroupMapping=true`, and
 `enableProductScopedDetailEvidence=true`. A verified service Lead or Engineer
@@ -132,12 +132,9 @@ API policy, then complete the remaining gates in
 
 Do not use `deploy-latest.sh` for an access-only release: it also applies
 migrations and runs evidence ingestion. Review an explicit CDK change set.
-Operational migrations, the existing-file routing backfill, and the Service
-Catalog migrations are release-specific evidence recorded in
-[`CHANGE_RECORD_2026-09-28_UI_UX_ROLLOUT.md`](../cbom-catalog/docs/CHANGE_RECORD_2026-09-28_UI_UX_ROLLOUT.md).
-The earlier diagnostic-stage application release used the direct CloudFormation
-path with all service-access switches disabled. Its temporary diagnostic code
-has since been removed from source; see the
-[change record](../cbom-catalog/docs/CHANGE_RECORD_2026-09-26_OIDC_DIAGNOSTIC_DEPLOYMENT.md).
+Operational migrations, existing-file routing backfill, and Service Catalog
+migrations must be verified through the
+[release checklist](../cbom-catalog/docs/RELEASE_CHECKLIST.md). Temporary
+diagnostic code has been removed from source.
 Never treat those changes as approval for source ingestion,
 planning/assessment changes, or detailed service evidence and write activation.
