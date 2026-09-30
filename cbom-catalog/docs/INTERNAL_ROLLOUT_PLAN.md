@@ -26,7 +26,8 @@ a missing, corrupt, or ambiguous active revision fails closed rather than
 restoring a retired deployment grant.
 
 `fedsse-admins` has portfolio and Admin access. `fedsse-external` and
-`fedsse-scr2-leads` receive only aggregate Overview and POA&M summaries. Every
+`fedsse-scr2-leads` receive aggregate Overview and POA&M summaries plus the
+read-only all-service POA&M Planning and Team milestones views. Every
 service Lead or Engineer mapping holds one or two exact
 `(source_collection, service_group, product_scope_id)` grants. The current
 product scope IDs are `secure-access-government` with label `FedRAMP High/IL2`

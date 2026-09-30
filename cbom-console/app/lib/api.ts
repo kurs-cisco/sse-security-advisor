@@ -25,6 +25,7 @@ export async function getPortfolioOverview(): Promise<OverviewResult> {
     const summary = await fetchJson<{
       counts: OverviewResponse["counts"];
       format_coverage?: Array<{ format?: string; count?: number }>;
+      component_types?: Array<{ component_type?: string; count?: number }>;
     }>("/api/v1/portfolio/overview-summary");
     // Portfolio summaries deliberately discard identifier-bearing collections.
     // Detailed records are loaded only from a selected service-scope endpoint.
@@ -40,7 +41,13 @@ export async function getPortfolioOverview(): Promise<OverviewResult> {
           source_files: item.count ?? 0,
           component_occurrences: 0,
         })),
-        component_types: [],
+        // Component categories are aggregate-only and contain no component,
+        // document, service, or library identifier.
+        component_types: (summary.component_types ?? []).map((item) => ({
+          component_type: item.component_type ?? "Unspecified",
+          unique_components: 0,
+          component_occurrences: item.count ?? 0,
+        })),
         top_crypto_libraries: [],
         service_groups: [],
       },

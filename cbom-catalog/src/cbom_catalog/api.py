@@ -81,7 +81,11 @@ from .operational_evidence_notes import (
 )
 from .service_impact import load_active_service_impacts
 from .service_catalog import SERVICE_GROUP_SLUG, ServiceCatalogError, normalized_change
-from .target_modules import load_active_target_modules
+from .target_modules import (
+    apply_catalog_crypto_module_plans,
+    evaluate_catalog_crypto_module_plan,
+    load_active_target_modules,
+)
 from .team_milestones import (
     TRACKER_SOURCE,
     build_portfolio_poam_items,
@@ -446,6 +450,8 @@ def _request_within_assigned_scope(request: Request, assigned: dict[str, Any]) -
     if request.url.path in {
         "/api/v1/portfolio/overview-summary",
         "/api/v1/portfolio/poam-summary",
+        "/api/v1/portfolio/poam-planning",
+        "/api/v1/portfolio/risk-assessment-poam",
     }:
         return request.method in {"GET", "HEAD"} and bool(assigned.get("summary_access"))
     if assigned.get("mode") == "portfolio" and assigned.get("role") == "admin":
@@ -688,6 +694,7 @@ class ServiceCatalogChange(BaseModel):
     service_impact_risk: str | None = Field(default=None, max_length=32)
     comments: str | None = Field(default=None, max_length=4_000)
     attributes: dict[str, Any] | None = None
+    crypto_module_plans: list[dict[str, Any]] | None = Field(default=None, max_length=16)
 
 
 class ServiceCatalogCreate(ServiceCatalogChange):
@@ -1049,6 +1056,7 @@ def _record_access_roster_snapshot(principal: Principal, assigned: dict[str, Any
             database,
             user_id=principal.user_id,
             effective_role=str(assigned.get("role") or "none"),
+            verified_admin="admin" in set(assigned.get("available_modes") or []),
             grants=list(assigned.get("grants") or []),
             policy_version=str(assigned.get("policy_version") or "unconfigured"),
             policy_fingerprint=str(assigned.get("fingerprint") or ""),
@@ -1624,6 +1632,133 @@ def _resolve_catalog_profiles(database: Any, payload: dict[str, Any]) -> dict[st
     return payload
 
 
+_PUBLIC_MODULE_OPTIONS_SQL = """SELECT evidence.evidence_key, evidence.module_name,
+          evidence.module_version, evidence.certificate_number,
+          evidence.public_status, evidence.source_kind, evidence.source_url,
+          evidence.source_title, evidence.authority, evidence.limitations,
+          evidence.payload_sha256, evidence.retrieved_on
+   FROM target_module_external_evidence evidence
+   JOIN target_module_evidence_import source ON source.id=evidence.import_id
+   WHERE source.is_active AND source.evidence_set_kind='public_authority'
+     AND evidence.module_name IS NOT NULL AND evidence.module_version IS NOT NULL
+     AND evidence.public_status IN ('active','cmvp_review','cmvp_in_process','submission_planned_or_in_progress')
+   ORDER BY evidence.module_name, evidence.module_version, evidence.evidence_key"""
+
+
+def _active_public_module_evidence(database: Any | None = None) -> list[dict[str, Any]]:
+    rows = database.execute(_PUBLIC_MODULE_OPTIONS_SQL).fetchall() if database is not None else _fetch_all(_PUBLIC_MODULE_OPTIONS_SQL)
+    return [dict(row) for row in rows]
+
+
+def _crypto_module_options() -> list[dict[str, Any]]:
+    """Expose active, checksum-addressed public sources as planning choices."""
+    result: list[dict[str, Any]] = []
+    for row in _active_public_module_evidence():
+        certificate = row.get("certificate_number") if row.get("source_kind") == "cmvp_certificate" and row.get("public_status") == "active" else None
+        public_label = (
+            f"CMVP {certificate} (public certificate)" if certificate else
+            "Vendor-reported CMVP review; no certificate" if row["public_status"] == "cmvp_review" else
+            "Vendor-reported CMVP in process; no certificate" if row["public_status"] == "cmvp_in_process" else
+            "Vendor lifecycle statement; no certificate"
+        )
+        result.append({
+            "id": row["evidence_key"],
+            "label": f"{row['module_name']} {row['module_version']} — {public_label}",
+            "module_name": row["module_name"], "module_version": row["module_version"],
+            "certificate_number": certificate, "public_status": row["public_status"],
+            "source_kind": row["source_kind"], "source_url": row["source_url"],
+            "source_title": row["source_title"], "authority": row["authority"],
+            "source_payload_sha256": row["payload_sha256"],
+            "retrieved_on": row["retrieved_on"],
+            "limitations": list(row.get("limitations") or []),
+        })
+    return result
+
+
+def _resolve_catalog_crypto_plans(
+    database: Any, payload: dict[str, Any], *, source_collection: str, service_group: str,
+) -> dict[str, Any]:
+    """Snapshot selected public evidence without promoting deployment claims."""
+    if "crypto_module_plans" not in payload:
+        return payload
+    options = {str(row["evidence_key"]): row for row in _active_public_module_evidence(database)}
+    enriched: list[dict[str, Any]] = []
+    for plan in payload["crypto_module_plans"]:
+        source_hash = plan.get("source_record_sha256")
+        if source_hash:
+            if source_collection != str(TRACKER_SOURCE["source_collection"]):
+                raise HTTPException(status_code=422, detail="An imported target-module link requires its exact source collection")
+            source = database.execute(
+                """SELECT module.record_sha256, module.current_module, module.current_version
+                   FROM team_target_module module
+                   JOIN target_module_import imported ON imported.id=module.import_id
+                   WHERE imported.is_active AND module.record_sha256=%s
+                     AND module.service_groups @> ARRAY[%s]::text[]""",
+                (source_hash, service_group),
+            ).fetchone()
+            if source is None:
+                raise HTTPException(status_code=422, detail="Imported target-module record is not current for this service group")
+            if (plan.get("current_module") != (source.get("current_module") or "").strip()
+                    or (plan.get("current_version") or "") != (source.get("current_version") or "").strip()):
+                raise HTTPException(status_code=422, detail="Current module and version must match the linked imported record")
+        preset_id = plan.get("target_preset_id")
+        if preset_id:
+            evidence = options.get(str(preset_id))
+            if evidence is None:
+                raise HTTPException(status_code=422, detail="Curated target module is unavailable; refresh the catalog options")
+            certificate = evidence.get("certificate_number") if evidence.get("source_kind") == "cmvp_certificate" and evidence.get("public_status") == "active" else None
+            enriched.append({
+                **plan,
+                "target_module": evidence["module_name"], "target_version": evidence["module_version"],
+                "cmvp_certificate": certificate, "public_status": evidence["public_status"],
+                "evidence_url": evidence["source_url"], "evidence_source_kind": evidence["source_kind"],
+                "evidence_payload_sha256": evidence["payload_sha256"],
+                "evidence_authority": evidence["authority"],
+                "evidence_grade": "user_asserted", "review_required": True,
+            })
+        else:
+            enriched.append({
+                **plan,
+                "target_module": plan["custom_target_module"], "target_version": plan["custom_target_version"],
+                "cmvp_certificate": None, "public_status": "user_asserted_unverified",
+                "evidence_url": plan["supporting_url"], "evidence_source_kind": "user_supplied_url",
+                "evidence_payload_sha256": None, "evidence_authority": None,
+                "evidence_grade": "user_asserted", "review_required": True,
+            })
+    return {**payload, "crypto_module_plans": enriched}
+
+
+def _verify_catalog_crypto_plan_references(
+    database: Any, payload: dict[str, Any], *, source_collection: str, service_group: str,
+) -> None:
+    """Reject a proposal if its selected evidence or imported row became stale."""
+    if "crypto_module_plans" not in payload:
+        return
+    active = {str(row["evidence_key"]): row for row in _active_public_module_evidence(database)}
+    for plan in payload["crypto_module_plans"]:
+        source_hash = plan.get("source_record_sha256")
+        if source_hash:
+            if source_collection != str(TRACKER_SOURCE["source_collection"]):
+                raise HTTPException(status_code=409, detail="Imported target-module link changed; refresh the proposal")
+            current = database.execute(
+                """SELECT module.current_module, module.current_version FROM team_target_module module
+                   JOIN target_module_import imported ON imported.id=module.import_id
+                   WHERE imported.is_active AND module.record_sha256=%s
+                     AND module.service_groups @> ARRAY[%s]::text[]""",
+                (source_hash, service_group),
+            ).fetchone()
+            if (current is None or
+                    plan.get("current_module") != (current.get("current_module") or "").strip() or
+                    (plan.get("current_version") or "") != (current.get("current_version") or "").strip()):
+                raise HTTPException(status_code=409, detail="Imported target-module link changed; refresh the proposal")
+        preset_id = plan.get("target_preset_id")
+        if preset_id and (
+            preset_id not in active or
+            plan.get("evidence_payload_sha256") != active[preset_id].get("payload_sha256")
+        ):
+            raise HTTPException(status_code=409, detail="Curated target evidence changed; refresh the proposal")
+
+
 def _catalog_group(database: Any, source_collection: str, service_group: str) -> dict[str, Any]:
     row = database.execute(
         """SELECT sg.id AS catalog_service_group_id, %s AS service_group,
@@ -1655,10 +1790,10 @@ def _catalog_entry_payload(payload: dict[str, Any]) -> tuple[list[str], list[Any
     """Build a bounded SQL SET clause from the explicit managed field allowlist."""
     allowed = {
         "display_name", "owner", "owner_user_id", "lead", "lead_user_id", "il2_status", "il2_target_date",
-        "il5_status", "il5_target_date", "service_impact_risk", "comments", "attributes",
+        "il5_status", "il5_target_date", "service_impact_risk", "comments", "attributes", "crypto_module_plans",
     }
     keys = [key for key in payload if key in allowed]
-    return keys, [Jsonb(payload[key]) if key == "attributes" else payload[key] for key in keys]
+    return keys, [Jsonb(payload[key]) if key in {"attributes", "crypto_module_plans"} else payload[key] for key in keys]
 
 
 def _catalog_overridden_fields(payload: dict[str, Any]) -> list[str]:
@@ -1697,7 +1832,10 @@ def _catalog_base_metadata(
     }
 
 
-def _catalog_rows(request: Request, source_collection: str | None = None) -> list[dict[str, Any]]:
+def _catalog_rows(
+    request: Request, source_collection: str | None = None, *,
+    portfolio_planning: bool = False,
+) -> list[dict[str, Any]]:
     _require_service_catalog()
     principal = _request_principal(request)
     assigned = getattr(request.state, "assigned_scope", {})
@@ -1706,7 +1844,7 @@ def _catalog_rows(request: Request, source_collection: str | None = None) -> lis
                   sg.display_name AS catalog_display_name, entry.revision, entry.display_name,
                   entry.owner, entry.lead, entry.il2_status, entry.il2_target_date,
                   entry.il5_status, entry.il5_target_date, entry.service_impact_risk,
-                  entry.comments, entry.attributes, entry.overridden_fields, entry.updated_at,
+                  entry.comments, entry.attributes, entry.crypto_module_plans, entry.overridden_fields, entry.updated_at,
                   owner_user.id AS owner_user_id, owner_user.email AS owner_user_email,
                   owner_user.display_name AS owner_user_display_name,
                   EXISTS (SELECT 1 FROM source_file sf WHERE sf.service_group_id=sg.id AND sf.is_present) AS has_evidence,
@@ -1729,7 +1867,7 @@ def _catalog_rows(request: Request, source_collection: str | None = None) -> lis
                   entry.service_group AS catalog_display_name, entry.revision, entry.display_name,
                   entry.owner, entry.lead, entry.il2_status, entry.il2_target_date,
                   entry.il5_status, entry.il5_target_date, entry.service_impact_risk,
-                  entry.comments, entry.attributes, entry.overridden_fields, entry.updated_at,
+                  entry.comments, entry.attributes, entry.crypto_module_plans, entry.overridden_fields, entry.updated_at,
                   owner_user.id AS owner_user_id, owner_user.email AS owner_user_email,
                   owner_user.display_name AS owner_user_display_name,
                   false AS has_evidence,
@@ -1763,9 +1901,24 @@ def _catalog_rows(request: Request, source_collection: str | None = None) -> lis
         for row in team_milestones(_active_target_module_contract()).get("groups", [])
     }
     impacts = _active_service_impact_map()
-    visible = rows if is_admin else [
+    visible = rows if is_admin or portfolio_planning else [
         row for row in rows if (str(row["source_collection"]), str(row["service_group"])) in allowed_pairs
     ]
+    # Avoid an external-evidence query for ordinary Catalog reads with no
+    # stored plans.  When plans are present, normalize the SQL names to the
+    # evaluator contract once per response.  The projection is deliberately
+    # read-only: a changed public record marks a previously approved selection
+    # superseded without rewriting the catalog plan or its snapshot fields.
+    has_crypto_plans = any(isinstance(row.get("crypto_module_plans"), list) and row["crypto_module_plans"] for row in visible)
+    active_public_evidence = [
+        {
+            **evidence,
+            "key": evidence.get("key") or evidence.get("evidence_key"),
+            "url": evidence.get("url") or evidence.get("source_url"),
+            "payload_sha256": evidence.get("payload_sha256") or evidence.get("evidence_payload_sha256"),
+        }
+        for evidence in _active_public_module_evidence()
+    ] if has_crypto_plans else []
     pending_by_pair: dict[tuple[str, str], int] = {}
     if principal.kind == "human" and principal.user_id is not None and not is_admin:
         pending_rows = _fetch_all(
@@ -1784,6 +1937,7 @@ def _catalog_rows(request: Request, source_collection: str | None = None) -> lis
     for row in visible:
         source = str(row["source_collection"])
         group = str(row["service_group"])
+        profile = profiles.get(group, {}) if source == str(TRACKER_SOURCE["source_collection"]) else {}
         base = _catalog_base_metadata(source, group, profiles=profiles, impacts=impacts)
         entry_exists = row.get("revision") is not None
         overrides = set(row.get("overridden_fields") or ()) if entry_exists else set()
@@ -1805,6 +1959,21 @@ def _catalog_rows(request: Request, source_collection: str | None = None) -> lis
             {"user_id": row["lead_user_id"], "email": row["lead_user_email"], "display_name": row.get("lead_user_display_name")}
             if row.get("lead_user_id") is not None else None
         )
+        crypto_module_plans: list[dict[str, Any]] = []
+        for plan in list(row.get("crypto_module_plans") or []):
+            if not isinstance(plan, dict):
+                continue
+            evaluation = evaluate_catalog_crypto_module_plan(plan, active_public_evidence)
+            # Keep the stored plan intact and append only a live rendering
+            # evaluation.  This distinguishes a once-approved selection from
+            # the state of the active public evidence import today.
+            crypto_module_plans.append({
+                **plan,
+                "planning_disposition": evaluation["status"],
+                "evidence_state": evaluation["evidence_state"],
+                "disposition_basis": evaluation["basis"],
+            })
+
         item = {
             "service_key": f"{source}/{group}", "source_collection": source,
             "service_group": group,
@@ -1824,6 +1993,18 @@ def _catalog_rows(request: Request, source_collection: str | None = None) -> lis
             "service_impact_risk": managed_value("service_impact_risk", base["service_impact_risk"]),
             "comments": managed_value("comments", base["comments"]),
             "attributes": managed_value("attributes", base["attributes"]),
+            "crypto_module_plans": crypto_module_plans,
+            "imported_target_modules": [
+                {
+                    "record_sha256": module.get("record_sha256"),
+                    "current_module": module.get("current_module"),
+                    "current_version": module.get("current_version"),
+                    "target_module": module.get("target_module"),
+                    "target_disposition": module.get("target_disposition"),
+                }
+                for module in (profile.get("target_modules") or [])
+                if isinstance(module, dict) and module.get("record_sha256")
+            ] if source == str(TRACKER_SOURCE["source_collection"]) else [],
             "revision": int(row.get("revision") or 0),
             "approval_status": "approved" if entry_exists else "imported",
             "pending_proposals": pending_by_pair.get((source, group), 0),
@@ -1844,7 +2025,7 @@ def _catalog_rows(request: Request, source_collection: str | None = None) -> lis
 def service_catalog(request: Request, source_collection: str | None = None) -> dict[str, Any]:
     """Role-scoped managed catalog view with imported values as its initial state."""
     rows = _catalog_rows(request, source_collection)
-    return {"items": rows, "total": len(rows)}
+    return {"items": rows, "total": len(rows), "crypto_module_options": _crypto_module_options()}
 
 
 @app.post("/api/v1/service-catalog/proposals", tags=["Service Catalog"], status_code=201)
@@ -1881,7 +2062,10 @@ def create_service_catalog_proposal(body: ServiceCatalogProposalCreate, request:
         revision = int(current["revision"]) if current else 0
         if revision != body.expected_revision:
             raise HTTPException(status_code=409, detail="Service Catalog entry changed; refresh before proposing an edit")
-        change = _resolve_catalog_profiles(database, change)
+        change = _resolve_catalog_crypto_plans(
+            database, _resolve_catalog_profiles(database, change),
+            source_collection=source_collection, service_group=service_group,
+        )
         row = database.execute(
             """INSERT INTO app_auth.service_catalog_proposal
                (id,source_collection_id,service_group,proposed_payload,rationale,base_revision,submitted_by_user_id)
@@ -1940,14 +2124,15 @@ def _upsert_catalog_entry(
     result = dict(row or {})
     snapshot = database.execute(
         """SELECT revision,display_name,owner,owner_user_id,lead,lead_user_id,il2_status,il2_target_date,
-                  il5_status,il5_target_date,service_impact_risk,comments,attributes,overridden_fields,updated_at
+                  il5_status,il5_target_date,service_impact_risk,comments,attributes,crypto_module_plans,overridden_fields,updated_at
            FROM app_auth.service_catalog_entry WHERE id=%s""", (result["id"],)
     ).fetchone()
     database.execute(
         """INSERT INTO app_auth.service_catalog_entry_revision
            (service_catalog_entry_id,revision,operation,reason,payload,actor_user_id)
            VALUES (%s,%s,%s,%s,%s,%s)""",
-        (result["id"], result["revision"], operation, reason, Jsonb(dict(snapshot or {})), actor_user_id),
+        (result["id"], result["revision"], operation, reason,
+         Jsonb(jsonable_encoder(dict(snapshot or {}))), actor_user_id),
     )
     return result
 
@@ -2001,7 +2186,10 @@ def create_service_catalog_entry(body: ServiceCatalogCreate, request: Request) -
             (collection["source_collection_id"], service_group),
         ).fetchone() is not None:
             raise HTTPException(status_code=409, detail="Service group already exists")
-        change = _resolve_catalog_profiles(database, change)
+        change = _resolve_catalog_crypto_plans(
+            database, _resolve_catalog_profiles(database, change),
+            source_collection=source_collection, service_group=service_group,
+        )
         row = _upsert_catalog_entry(
             database, collection=collection, service_group=service_group, catalog_service_group_id=None,
             change=change, expected_revision=0, actor_user_id=principal.user_id,
@@ -2037,7 +2225,10 @@ def update_service_catalog_entry(
         ).fetchone()
         if existing is None and managed is None:
             raise HTTPException(status_code=404, detail="Service group not found")
-        change = _resolve_catalog_profiles(database, change)
+        change = _resolve_catalog_crypto_plans(
+            database, _resolve_catalog_profiles(database, change),
+            source_collection=source_collection, service_group=service_group,
+        )
         row = _upsert_catalog_entry(
             database, collection=collection, service_group=service_group,
             catalog_service_group_id=int(existing["id"]) if existing else None,
@@ -2110,6 +2301,12 @@ def decide_service_catalog_proposal(
         revision = int(current["revision"]) if current else 0
         if body.decision == "approved" and revision != int(proposal["base_revision"]):
             raise HTTPException(status_code=409, detail="Service Catalog proposal is stale; the entry changed after submission")
+        if body.decision == "approved":
+            _verify_catalog_crypto_plan_references(
+                database, dict(proposal["proposed_payload"]),
+                source_collection=str(proposal["source_collection"]),
+                service_group=str(proposal["service_group"]),
+            )
         decision = database.execute(
             """INSERT INTO app_auth.service_catalog_proposal_decision
                (proposal_id,decision,decision_reason,decided_by_user_id)
@@ -2155,9 +2352,12 @@ def current_user(request: Request) -> dict[str, Any]:
             )
         ]
     else:
-        service_groups = [
+        # Product contexts are distinct grants, but the profile's service
+        # register is a collection/service inventory.  A person assigned to
+        # both Government and Defense therefore sees one service entry here.
+        service_groups = sorted({
             f"{row['source_collection']}/{row['service_group']}" for row in grants
-        ]
+        })
     return {
         "kind": principal.kind,
         "email": principal.email,
@@ -2231,7 +2431,7 @@ def admin_users(request: Request) -> dict[str, Any]:
         """
         WITH latest_snapshot AS (
             SELECT DISTINCT ON (app_user_id)
-                   app_user_id, effective_role, exact_grants, policy_version,
+                   app_user_id, effective_role, verified_admin, exact_grants, policy_version,
                    policy_fingerprint, verified_at
             FROM app_auth.access_roster_snapshot
             ORDER BY app_user_id, verified_at DESC, id DESC
@@ -2244,7 +2444,7 @@ def admin_users(request: Request) -> dict[str, Any]:
         SELECT app_user.id, app_user.email, app_user.display_name, app_user.role, app_user.status,
                app_user.oidc_subject IS NOT NULL AS identity_bound,
                app_user.created_at, app_user.updated_at, app_user.last_login_at,
-               snapshot.effective_role, snapshot.exact_grants AS grants, snapshot.policy_version,
+               snapshot.effective_role, snapshot.verified_admin, snapshot.exact_grants AS grants, snapshot.policy_version,
                snapshot.policy_fingerprint, snapshot.verified_at AS last_verified_at,
                coalesce(action.action, 'restore') AS access_state,
                action.reason AS access_reason, action.occurred_at AS access_changed_at,
@@ -5825,6 +6025,270 @@ def portfolio_poam_summary(request: Request) -> Response:
     )
 
 
+def _catalog_planning_milestones(catalog: list[dict[str, Any]]) -> dict[str, Any]:
+    """Project approved module plans for display; retain immutable imports."""
+    planning = team_milestones(_active_target_module_contract())
+    if not any(row.get("crypto_module_plans") for row in catalog):
+        return planning
+    return apply_catalog_crypto_module_plans(
+        planning, catalog, public_evidence=_active_public_module_evidence(),
+    )
+
+
+def _catalog_present_document_counts() -> dict[str, int]:
+    """Count distinct current catalog documents for each SSE service group."""
+    rows = _fetch_all(
+        """SELECT sc.slug || '/' || sg.slug AS service_key,
+                  count(DISTINCT sf.document_id) AS documents
+           FROM service_group sg
+           JOIN source_collection sc ON sc.id=sg.source_collection_id
+           LEFT JOIN source_file sf ON sf.service_group_id=sg.id AND sf.is_present
+           WHERE sc.slug='sse-cboms'
+           GROUP BY sc.slug, sg.slug"""
+    )
+    return {str(row["service_key"]): int(row["documents"] or 0) for row in rows}
+
+
+@app.get("/api/v1/portfolio/poam-planning", tags=["portfolio"])
+def portfolio_poam_planning(request: Request) -> Response:
+    """Shared read-only SSE planning projection; no candidate or evidence detail."""
+    catalog = _catalog_rows(request, "sse-cboms", portfolio_planning=True)
+    visible_fields = (
+        "service_key", "source_collection", "service_group", "display_name",
+        "owner", "lead", "il2", "il5", "service_impact_risk", "comments",
+    )
+    document_counts = _catalog_present_document_counts()
+    return JSONResponse(
+        jsonable_encoder({
+            "scope": "portfolio-planning",
+            "source_collection": "sse-cboms",
+            "catalog": [{field: row.get(field) for field in visible_fields} for row in catalog],
+            "document_counts": [
+                {"service_key": service_key, "documents": documents}
+                for service_key, documents in document_counts.items()
+            ],
+            "milestones": _catalog_planning_milestones(catalog),
+        }),
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+def _risk_assessment_impact_summary(
+    catalog: list[dict[str, Any]], service_groups: set[str],
+    document_counts: dict[str, int],
+) -> dict[str, dict[str, int]]:
+    """Aggregate current planning impact without exposing internal identities."""
+    summary = {
+        bucket: {"service_group_count": 0, "catalog_record_count": 0}
+        for bucket in ("critical", "moderate", "other", "total")
+    }
+    seen: set[str] = set()
+    for row in catalog:
+        collection = str(row.get("source_collection") or "sse-cboms")
+        group = str(row.get("service_group") or "")
+        service_key = f"{collection}/{group}"
+        if collection != "sse-cboms" or group not in service_groups or service_key in seen:
+            continue
+        seen.add(service_key)
+        risk = str(row.get("service_impact_risk") or "").strip().lower()
+        bucket = (
+            "critical" if risk in {"critical", "high"}
+            else "moderate" if risk in {"moderate", "medium"}
+            else "other"
+        )
+        records = max(0, document_counts.get(service_key, 0))
+        for key in (bucket, "total"):
+            summary[key]["service_group_count"] += 1
+            summary[key]["catalog_record_count"] += records
+    return summary
+
+
+def _risk_assessment_service_groups_for_il2_month(
+    catalog: list[dict[str, Any]], year_month: str,
+) -> set[str]:
+    """Select groups from the current authoritative Service Catalog IL2 date.
+
+    Tracker waves remain useful historical planning context, but they must not
+    determine the groups linked to this Service Catalog view.
+    """
+    return {
+        str(row.get("service_group"))
+        for row in catalog
+        if isinstance(row.get("il2"), dict)
+        # Catalog-managed active plans retain their target date across the
+        # lifecycle.  Exclude only explicit non-date/non-applicable states.
+        and str(row["il2"].get("status") or "") in {
+            "dated", "done", "planned", "in_progress", "complete", "blocked",
+        }
+        and str(row["il2"].get("date") or "").startswith(f"{year_month}-")
+    }
+
+
+@app.get("/api/v1/portfolio/risk-assessment-poam", tags=["portfolio"])
+def portfolio_risk_assessment_poam(request: Request) -> Response:
+    """Read-only planning impact; this is not a POA&M decision."""
+    catalog = _catalog_rows(request, "sse-cboms", portfolio_planning=True)
+    document_counts = _catalog_present_document_counts()
+
+    def impact_for_month(year_month: str) -> dict[str, dict[str, int]]:
+        return _risk_assessment_impact_summary(
+            catalog,
+            _risk_assessment_service_groups_for_il2_month(catalog, year_month),
+            document_counts,
+        )
+
+    def milestones_for_catalog_month(label: str) -> list[dict[str, Any]]:
+        return [{
+            "label": f"{label} planning window",
+            "target_date": None,
+            "status": "planning_window",
+            "detail": "Current Service Catalog IL2 planning month. Individual dates vary; this is not an approved remediation date.",
+        }]
+
+    limitations = [
+        "Planning drafts require authorized assessment and disposition before becoming POA&M records.",
+        "Moderate applies only to the three 140-2 to 140-3 transition drafts; DNSCrypt is not rated pending assessment.",
+        "No immutable deployment attestation, ATO-boundary linkage, CMVP validation correlation, or approved configuration evidence is supplied here.",
+        "The selected October, December, and March windows are not exhaustive; September, November, February, and undated planning records also exist.",
+        "This response creates no POA&M, deviation, authorization, deployment, or access-scope record.",
+    ]
+    owner_direction = {
+        "source": "owner-provided request",
+        "received_at": "2026-09-29",
+        "evidence_grade": "user_asserted",
+        "review_required": True,
+    }
+    payload = {
+        "scope": "portfolio-summary",
+        "assessment_state": "not_assessable",
+        "assertion_state": "user_asserted",
+        "source_collection": "sse-cboms",
+        "planning_provenance": {
+            "source": "Service Catalog",
+            "authoritative_for": "IL2 planning-month selection and planning impact categories",
+            "review_required": True,
+        },
+        "tracker_context": {
+            "source": TRACKER_SOURCE["source"],
+            "source_commit": TRACKER_SOURCE["source_commit"],
+            "evidence_grade": TRACKER_SOURCE["evidence_grade"],
+            "usage": "historical context only; not used to select planning impact coverage",
+        },
+        "owner_direction": owner_direction,
+        "items": [
+            {
+                "id": "OWNER-DRAFT-OCT-2026",
+                "title": "October 2026 transition planning window",
+                "kind": "owner_directed_draft_deviation",
+                "control_id": "SC-13",
+                "control_mapping_assertion": "owner_proposed",
+                "risk": {"value": "Moderate", "assertion": "user_asserted"},
+                "status": "owner_directed_draft_deviation",
+                "approval_state": "pending_authorized_assessment_and_disposition",
+                "poam_eligibility": False,
+                "summary": "140-2 to 140-3 transition planning for the selected, non-exhaustive October 2026 IL2 window.",
+                "milestones": milestones_for_catalog_month("October 2026"),
+                "deviations": [],
+                "impact_summary": impact_for_month("2026-10"),
+                "limitations": list(limitations),
+            },
+            {
+                "id": "OWNER-DRAFT-DEC-2026",
+                "title": "December 2026 transition planning window",
+                "kind": "owner_directed_draft_deviation",
+                "control_id": "SC-13",
+                "control_mapping_assertion": "owner_proposed",
+                "risk": {"value": "Moderate", "assertion": "user_asserted"},
+                "status": "owner_directed_draft_deviation",
+                "approval_state": "pending_authorized_assessment_and_disposition",
+                "poam_eligibility": False,
+                "summary": "140-2 to 140-3 transition planning for the selected, non-exhaustive December 2026 IL2 window.",
+                "milestones": milestones_for_catalog_month("December 2026"),
+                "deviations": [],
+                "impact_summary": impact_for_month("2026-12"),
+                "limitations": list(limitations),
+            },
+            {
+                "id": "OWNER-DRAFT-MAR-2027-VENDOR",
+                "title": "March 2027 planning wave and vendor-dependency review",
+                "kind": "owner_directed_draft_deviation",
+                "control_id": "SC-13",
+                "control_mapping_assertion": "owner_proposed",
+                "risk": {"value": "Moderate", "assertion": "user_asserted"},
+                "status": "owner_directed_draft_deviation",
+                "approval_state": "pending_authorized_assessment_and_disposition",
+                "poam_eligibility": False,
+                "summary": "140-2 to 140-3 transition planning for the selected, non-exhaustive March 2027 window and a separate vendor-dependency review request.",
+                "milestones": milestones_for_catalog_month("March 2027") + [{
+                    "label": "Reported vendor dependency — verification required",
+                    "target_date": None,
+                    "status": "verification_required",
+                    "detail": "This requested review does not assert that March-dated service groups have a vendor dependency.",
+                }],
+                "deviations": [{
+                    "title": "Reported vendor dependency — verification required",
+                    "detail": "A CMVP In-Test/In-Progress vendor dependency has been reported. Verify vendor identity, CMVP status, deployment applicability, and approved remediation before any deviation decision; no verified deployment, certificate linkage, or causal March date is asserted.",
+                    "assertion_state": "user_asserted",
+                    "assessment_state": "not_assessable",
+                    "poam_eligibility": False,
+                }],
+                "impact_summary": impact_for_month("2027-03"),
+                "limitations": list(limitations),
+            },
+            {
+                "id": "OWNER-DRAFT-DNSCRYPT",
+                "title": "DNSCrypt continuity topics for assessment",
+                "kind": "owner_directed_draft_deviation",
+                "control_id": "Pending mapping",
+                "control_mapping_assertion": "pending_assessment",
+                "risk": {"value": "Not rated", "assertion": "pending_assessment"},
+                "status": "owner_directed_draft_deviation",
+                "approval_state": "pending_authorized_assessment_and_disposition",
+                "poam_eligibility": False,
+                "summary": "DNSCrypt continuity planning with two technical topics awaiting assessment.",
+                "milestones": [{
+                    "label": "DNSCrypt ES3 to ES4 KDF March planning window",
+                    "target_date": None,
+                    "status": "planning_window",
+                    "detail": "March 2027 planning input; no verified deployment linkage or confirmed transition date is supplied.",
+                }, {
+                    "label": "Assessment and approval",
+                    "target_date": None,
+                    "status": "assessment_pending",
+                    "detail": "No approved remediation date is supplied for this draft record.",
+                }],
+                "deviations": [
+                    {
+                        "title": "DNSCrypt ES3 → ES4 KDF transition",
+                        "detail": "Submitted technical analysis requests review of a raw-ECDH to HKDF transition. The referenced analysis has not been ingested or correlated to an ATO, deployment, or primary validation artifact.",
+                        "assertion_state": "user_asserted",
+                        "assessment_state": "not_assessable",
+                        "poam_eligibility": False,
+                        "reference_url": "https://cisco-sbg.atlassian.net/wiki/spaces/trac3/pages/1516647476/DNSCrypt+ES3+to+ES4+Key+Derivation+and+the+FIPS+140-3+Gap",
+                        "artifact": {
+                            "kind": "owner_provided_technical_analysis",
+                            "reference_url": "https://cisco-sbg.atlassian.net/wiki/spaces/trac3/pages/1516647476/DNSCrypt+ES3+to+ES4+Key+Derivation+and+the+FIPS+140-3+Gap",
+                            "sha256": "f1f1545ffea1fd074f0428e6d4cbfab414f013cf71a345237e16062d8c631c34",
+                            "ingested": False,
+                            "reference_status": "user_provided_discussion_reference_only",
+                        },
+                    },
+                    {
+                        "title": "DNSSEC Ed25519/Ed448 algorithm-support continuity concern",
+                        "detail": "Assess whether DNSSEC Ed25519/Ed448 algorithm support affects service continuity. PMO discussion reported; approval record and scoped technical evidence not supplied.",
+                        "assertion_state": "user_asserted",
+                        "assessment_state": "not_assessable",
+                        "poam_eligibility": False,
+                    },
+                ],
+                "impact_summary": _risk_assessment_impact_summary(catalog, {"dns-platform"}, document_counts),
+                "limitations": list(limitations),
+            },
+        ],
+    }
+    return JSONResponse(jsonable_encoder(payload), headers={"Cache-Control": "private, no-store"})
+
+
 @app.get("/api/v1/portfolio/product-scope-status", tags=["portfolio"])
 def portfolio_product_scope_status(request: Request) -> dict[str, Any]:
     """Aggregate attribution coverage only; never exposes a source or service pair."""
@@ -5897,9 +6361,15 @@ def portfolio_product_scope_status(request: Request) -> dict[str, Any]:
 @app.get("/api/v1/fips/team-milestones", tags=["FIPS 140-3 assessment"])
 def fips_team_milestones(
     source_collection: str | None = None, service_group: str | None = None,
+    request: Request = None,
 ) -> dict[str, Any]:
     """Reviewed tracker crosswalk; planning metadata only, never validation evidence."""
-    payload = team_milestones(_active_target_module_contract())
+    if request is not None and _service_catalog_enabled() and (
+        source_collection is None or source_collection == str(TRACKER_SOURCE["source_collection"])
+    ):
+        payload = _catalog_planning_milestones(_catalog_rows(request, "sse-cboms"))
+    else:
+        payload = team_milestones(_active_target_module_contract())
     if source_collection is None or service_group is None:
         return payload
     selected = [

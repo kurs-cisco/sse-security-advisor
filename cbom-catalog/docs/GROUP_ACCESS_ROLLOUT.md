@@ -36,10 +36,10 @@ and [product-detail activation record](CHANGE_RECORD_2026-09-27_PRODUCT_DETAIL_A
 | Exact verified group | Portfolio Overview and POA&M | Service detail | Write |
 | --- | --- | --- | --- |
 | `fedsse-admins` | Full | All configured services and Admin | Administrative actions |
-| `fedsse-<registered-key>-leads` | Numeric aggregates | Read-only catalog detail when the exact collection, service group, product context, and current-file routing all match; Reviews remains grant-only | Proposed operational writes require a later gate and another admin's decision; no authored-data edit |
-| `fedsse-<registered-key>-engineers` | Numeric aggregates | Read-only catalog detail when the exact collection, service group, product context, and current-file routing all match; Reviews remains grant-only | None |
-| `fedsse-external` | Numeric aggregates only | None | None |
-| `fedsse-scr2-leads` | Numeric aggregates only | None until separately mapped | None until separately mapped |
+| `fedsse-<registered-key>-leads` | Aggregates and read-only Planning/Team milestones | Read-only catalog detail when the exact collection, service group, product context, and current-file routing all match; Reviews remains grant-only | Proposed operational writes require a later gate and another admin's decision; no authored-data edit |
+| `fedsse-<registered-key>-engineers` | Aggregates and read-only Planning/Team milestones | Read-only catalog detail when the exact collection, service group, product context, and current-file routing all match; Reviews remains grant-only | None |
+| `fedsse-external` | Aggregates and read-only Planning/Team milestones | None | None |
+| `fedsse-scr2-leads` | Aggregates and read-only Planning/Team milestones | None until separately mapped | None until separately mapped |
 
 No recognized group means no catalog access. The same exact service group covers
 Government (`FedRAMP High/IL2`) and Defense (`IL5`), as the owner directed.

@@ -4,11 +4,12 @@ import { useCallback, useEffect, useState, type KeyboardEvent } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Clipboard, KeyRound, RefreshCw, RotateCcw, ShieldCheck, UserCog, UserX } from "lucide-react";
 import { fetchJson } from "@/app/lib/http";
-import type { AuthMeResponse, EffectiveAccessGrant } from "@/app/lib/contracts";
+import type { AccessMode, AuthMeResponse, EffectiveAccessGrant } from "@/app/lib/contracts";
 import { Badge } from "@/app/components/ui/badge";
 import { Card } from "@/app/components/ui/card";
 import { IngestionWorkspace } from "@/components/admin/ingestion-workspace";
 import { MappingDialog, ServiceGroupMapping } from "@/components/admin/service-group-mapping";
+import { ServiceCatalogApprovalQueue } from "@/components/accountability/service-catalog";
 
 type Identity = AuthMeResponse & { can_edit: boolean };
 type User = {
@@ -22,6 +23,7 @@ type User = {
   policy_version: string | null;
   group_fingerprint: string | null;
   effective_role: string | null;
+  verified_admin?: boolean | null;
   grants?: EffectiveAccessGrant[];
   revoked_at: string | null;
   revoked_reason: string | null;
@@ -49,6 +51,7 @@ const ADMIN_SECTIONS = [
   { id: "mappings", label: "Service mappings", description: "Groups and product scope" },
   { id: "ingestion", label: "Data ingestion", description: "Uploads and job history" },
   { id: "users", label: "Users", description: "Recorded access" },
+  { id: "reviews", label: "Approvals", description: "Service changes and history" },
   { id: "tokens", label: "Scoped tokens", description: "Direct API access" },
 ] as const;
 
@@ -58,20 +61,65 @@ function isAdminSection(value: string | null): value is AdminSection {
   return ADMIN_SECTIONS.some((section) => section.id === value);
 }
 
-function grantSummary(grant: EffectiveAccessGrant) {
-  return `${grant.source_collection}/${grant.service_group} · ${grant.product_scope_id} (${grant.boundary_name}) · ${grant.access}`;
+const accessModeLabel: Record<AccessMode, string> = {
+  admin: "Admin",
+  product_lead: "Product Lead",
+  product_engineer: "Product Engineer",
+  summary: "Summary viewer",
+};
+
+function serviceContextSummary(grants: EffectiveAccessGrant[]) {
+  const byService = new Map<string, EffectiveAccessGrant[]>();
+  for (const grant of grants) {
+    const key = `${grant.source_collection}/${grant.service_group}`;
+    byService.set(key, [...(byService.get(key) ?? []), grant]);
+  }
+  return [...byService.entries()].map(([service, contexts]) => {
+    const contextText = contexts
+      .map((grant) => `${grant.boundary_name} · ${grant.access === "lead" ? "Lead" : "Engineer"}`)
+      .join("; ");
+    return `${service}: ${contexts.length} product context${contexts.length === 1 ? "" : "s"} (${contextText})`;
+  }).join(". ");
 }
 
 function liveScopeSummary(identity: Identity) {
   const access = identity.access;
   const grants = access?.grants ?? [];
   if (access?.effective_role === "admin") {
-    const memberships = grants.length ? ` Additional exact service memberships: ${grants.map(grantSummary).join(", ")}` : "";
-    return `Portfolio-wide catalog and administration access; no per-service grant is required.${memberships}`;
+    return "Portfolio-wide catalog and administration access; no per-service grant is required for this workspace.";
   }
-  if (grants.length) return grants.map(grantSummary).join(", ");
+  if (grants.length) return serviceContextSummary(grants);
   if (access?.effective_role === "summary") return "Aggregate summary access; no per-service grants apply";
   return "No exact service grants in this current session";
+}
+
+function availableModeSummary(identity: Identity) {
+  const modes = identity.access?.available_modes ?? [];
+  if (!modes.length) return null;
+  const active = identity.access?.active_mode;
+  return `Available workspaces: ${modes.map((mode) => accessModeLabel[mode]).join(", ")}.${active ? ` Active: ${accessModeLabel[active]}.` : " Choose a workspace to continue."}`;
+}
+
+function historicalWorkspaceLabel(role: string | null) {
+  if (role === "admin") return "Admin";
+  if (role === "lead") return "Product Lead";
+  if (role === "engineer") return "Product Engineer";
+  if (role === "summary") return "Summary viewer";
+  return "Historical verification recorded";
+}
+
+function historicalAccessSummary(user: User, historicalSnapshot: boolean) {
+  if (!historicalSnapshot) return "No recorded verified session";
+  const verifiedAdmin = user.verified_admin === true || user.effective_role === "admin";
+  const workspace = historicalWorkspaceLabel(user.effective_role);
+  return verifiedAdmin
+    ? `Admin observed · last workspace: ${workspace}`
+    : `Last workspace: ${workspace}`;
+}
+
+function historicalScopeCounts(grants: EffectiveAccessGrant[]) {
+  const services = new Set(grants.map((grant) => `${grant.source_collection}/${grant.service_group}`));
+  return { services: services.size, contexts: grants.length };
 }
 
 function tokenState(token: Token) {
@@ -222,7 +270,7 @@ export function AdminConsole() {
   if (!identity?.can_edit) return <section className="page-heading"><div><p className="eyebrow">Access administration</p><h1>Administrator access required</h1><p className="page-subtitle">Your account has read-only access to the evidence catalog.</p>{error && <p className="admin-error">{error}</p>}</div></section>;
 
   return <div className="admin-workbench">
-    <section className="page-heading"><div><p className="eyebrow">Operations and access</p><h1>Administrator workspace</h1><p className="page-subtitle">Manage service mappings, ingestion, recorded access, and scoped API credentials.</p></div><div className="heading-actions"><Badge tone="success"><ShieldCheck size={14} />{identity.email}</Badge><button className="refresh-button" type="button" onClick={() => void refreshWorkspace()} disabled={loading || (activeSection === "users" && usersLoading) || (activeSection === "tokens" && tokensLoading)}><RefreshCw size={17} className={loading || (activeSection === "users" && usersLoading) || (activeSection === "tokens" && tokensLoading) ? "spin" : ""} />Refresh access</button></div></section>
+    <section className="page-heading"><div><p className="eyebrow">Operations and access</p><h1>Administrator workspace</h1><p className="page-subtitle">Manage service mappings, ingestion, access history, approvals, and scoped API credentials.</p></div><div className="heading-actions"><Badge tone="success"><ShieldCheck size={14} />{identity.email}</Badge><button className="refresh-button" type="button" onClick={() => void refreshWorkspace()} disabled={loading || (activeSection === "users" && usersLoading) || (activeSection === "tokens" && tokensLoading)}><RefreshCw size={17} className={loading || (activeSection === "users" && usersLoading) || (activeSection === "tokens" && tokensLoading) ? "spin" : ""} />Refresh access</button></div></section>
     {error && <div className="admin-error" role="alert">{error}</div>}
     <div className="admin-section-tabs" role="tablist" aria-label="Administrator workspace sections">
       {ADMIN_SECTIONS.map((section, index) => <button key={section.id} id={`admin-tab-${section.id}`} type="button" role="tab" aria-selected={activeSection === section.id} aria-controls={`admin-panel-${section.id}`} tabIndex={activeSection === section.id ? 0 : -1} className={activeSection === section.id ? "admin-section-tab admin-section-tab-active" : "admin-section-tab"} onClick={() => selectSection(section.id)} onKeyDown={(event) => onSectionKeyDown(event, index)}><span>{section.label}</span>{section.id === "users" ? <Badge tone="info">{usersLoading ? "…" : usersLoaded ? users.length : "Not loaded"}</Badge> : section.id === "tokens" ? <Badge tone="neutral">{tokensLoading ? "…" : tokensLoaded ? tokens.length : "Not loaded"}</Badge> : <small>{section.description}</small>}</button>)}
@@ -230,11 +278,14 @@ export function AdminConsole() {
     <section id="admin-panel-mappings" role="tabpanel" aria-labelledby="admin-tab-mappings" hidden={activeSection !== "mappings"} className="admin-tab-panel">{activeSection === "mappings" ? <ServiceGroupMapping /> : null}</section>
     <section id="admin-panel-ingestion" role="tabpanel" aria-labelledby="admin-tab-ingestion" hidden={activeSection !== "ingestion"} className="admin-tab-panel">{activeSection === "ingestion" ? <IngestionWorkspace operatorReady={identity.kind !== "local"} /> : null}</section>
     <section id="admin-panel-users" role="tabpanel" aria-labelledby="admin-tab-users" hidden={activeSection !== "users"} className="admin-tab-panel">
-      <Card className="admin-card"><div className="card-heading"><div><p className="eyebrow">Access roster</p><h2><UserCog size={18} />Users</h2><p className="admin-card-note">This table contains historical application access snapshots for users who reached the application. It does not represent current MyID membership, a live authorization decision, or the full directory.</p></div><Badge tone="info">{usersLoading ? "Loading" : users.length}</Badge></div><div className="admin-form"><section className="rounded-lg border border-border bg-muted/40 p-3" aria-label="Current signed session"><p className="eyebrow">Current signed session only</p><strong className="mt-1 block text-sm">{identity.email || "Verified local development identity"} · {identity.access?.effective_role ?? identity.role ?? "Access being verified"}</strong><small className="mt-1 block text-muted-foreground">{liveScopeSummary(identity)}</small><small className="mt-1 block text-muted-foreground">This is the only live verified access decision shown here · policy {identity.access?.policy_version ?? "not recorded"}</small></section></div>{usersError ? <p className="admin-error" role="alert">{usersError}</p> : null}{!canManageRoster ? <p className="admin-card-note">Revoke and restore are unavailable until the access-control migration and audited API capability are active.</p> : null}<div className="table-scroll"><table><thead><tr><th>User</th><th>Historical application snapshot</th><th>Recorded application state</th>{canManageRoster ? <th><span className="sr-only">Access action</span></th> : null}</tr></thead><tbody>{users.map((user) => {
-        const historicalSnapshot = Boolean(user.last_verified_at || user.effective_role || (user.grants ?? []).length);
-        return <tr key={user.id}><td><strong>{user.email}</strong><small>{user.display_name ?? "No display name"} · last application sign-in {user.last_login_at ? new Date(user.last_login_at).toLocaleDateString() : "never"}</small></td><td><strong>{historicalSnapshot ? user.effective_role ?? "Historical verification recorded" : "No recorded verified session"}</strong><small>{(user.grants ?? []).length ? (user.grants ?? []).map(grantSummary).join(", ") : historicalSnapshot ? "No exact service grants recorded in this historical snapshot" : "No recorded historical service grants"}</small><small>{historicalSnapshot ? `Recorded ${user.last_verified_at ? new Date(user.last_verified_at).toLocaleString() : "time not recorded"} · policy ${user.policy_version ?? "not recorded"}` : "No historical policy or verification time is recorded"}</small></td><td><Badge tone={user.revoked_at || user.status === "disabled" ? "danger" : user.identity_bound ? "info" : "warning"}>{user.revoked_at ? "Revoked locally" : user.status === "disabled" ? "Disabled locally" : user.identity_bound ? "Identity binding recorded" : "No recorded verified session"}</Badge>{user.revoked_reason ? <small>{user.revoked_reason}</small> : null}</td>{canManageRoster ? <td>{user.revoked_at ? <button className="admin-save" type="button" disabled={changingUser === user.id} onClick={() => { setDialogError(""); setPendingAccess({ user, action: "restore" }); }}><RotateCcw size={14} />{changingUser === user.id ? "Restoring…" : "Restore"}</button> : <button className="admin-save" type="button" disabled={changingUser === user.id} onClick={() => { setDialogError(""); setPendingAccess({ user, action: "revoke" }); }}><UserX size={14} />{changingUser === user.id ? "Revoking…" : "Revoke"}</button>}</td> : null}</tr>;
-      })}{usersLoading && !users.length ? <tr><td colSpan={canManageRoster ? 4 : 3} className="admin-empty">Loading recorded application users…</td></tr> : null}{!usersLoading && !usersError && usersLoaded && !users.length ? <tr><td colSpan={canManageRoster ? 4 : 3} className="admin-empty">No recorded application users yet.</td></tr> : null}</tbody></table></div></Card>
+      <Card className="admin-card access-roster-card"><div className="card-heading"><div><p className="eyebrow">Access roster</p><h2><UserCog size={18} />Users</h2><p className="admin-card-note">Recorded CBOM access history for users who have reached this application.</p></div><Badge tone="info">{usersLoading ? "Loading" : users.length}</Badge></div><div className="access-roster-session"><section aria-label="Current signed session"><p className="eyebrow">Current session</p><strong>{identity.email || "Verified local development identity"} · {identity.access?.effective_role ?? identity.role ?? "Access being verified"}</strong><small>{liveScopeSummary(identity)}</small>{availableModeSummary(identity) ? <small>{availableModeSummary(identity)}</small> : null}</section></div>{usersError ? <p className="admin-error" role="alert">{usersError}</p> : null}{!canManageRoster ? <p className="access-roster-capability">Revoke and restore are unavailable in this deployment.</p> : null}<p className="table-scroll-hint">Each row is a historical application snapshot. It does not show current MyID membership or a live authorization decision.</p><div className="table-scroll access-roster-table-scroll" role="region" aria-label="Access roster" tabIndex={0}><table className="access-roster-table"><caption className="sr-only">Recorded application access history</caption><thead><tr><th>User</th><th>Last verified workspace</th><th>Historical scope</th><th>Recorded state</th>{canManageRoster ? <th><span className="sr-only">Access action</span></th> : null}</tr></thead><tbody>{users.map((user) => {
+        const historicalSnapshot = Boolean(user.last_verified_at || user.effective_role || user.verified_admin || (user.grants ?? []).length);
+        const grants = user.grants ?? [];
+        const scope = historicalScopeCounts(grants);
+        return <tr key={user.id}><td data-label="User"><strong>{user.email}</strong><small>{user.display_name ?? "No display name"}</small><small>Last sign-in {user.last_login_at ? new Date(user.last_login_at).toLocaleDateString() : "never"}</small></td><td data-label="Last verified workspace"><strong>{historicalAccessSummary(user, historicalSnapshot)}</strong><small>{historicalSnapshot ? `Recorded ${user.last_verified_at ? new Date(user.last_verified_at).toLocaleString() : "time not recorded"}` : "No verification recorded"}</small></td><td data-label="Historical scope">{grants.length ? <><strong>{scope.services} service{scope.services === 1 ? "" : "s"} · {scope.contexts} product context{scope.contexts === 1 ? "" : "s"}</strong><details><summary>View assignments</summary><small>{serviceContextSummary(grants)}</small></details></> : <small>{historicalSnapshot ? "No exact service grants recorded" : "No recorded historical service grants"}</small>}</td><td data-label="Recorded state"><Badge tone={user.revoked_at || user.status === "disabled" ? "danger" : user.identity_bound ? "info" : "warning"}>{user.revoked_at ? "Revoked locally" : user.status === "disabled" ? "Disabled locally" : user.identity_bound ? "Identity binding recorded" : "No recorded verified session"}</Badge><small>{historicalSnapshot ? `Policy ${user.policy_version ?? "not recorded"}` : "No policy recorded"}</small>{user.revoked_reason ? <small>{user.revoked_reason}</small> : null}</td>{canManageRoster ? <td className="access-roster-action">{user.revoked_at ? <button className="admin-save" type="button" disabled={changingUser === user.id} onClick={() => { setDialogError(""); setPendingAccess({ user, action: "restore" }); }}><RotateCcw size={14} />{changingUser === user.id ? "Restoring…" : "Restore"}</button> : <button className="admin-save" type="button" disabled={changingUser === user.id} onClick={() => { setDialogError(""); setPendingAccess({ user, action: "revoke" }); }}><UserX size={14} />{changingUser === user.id ? "Revoking…" : "Revoke"}</button>}</td> : null}</tr>;
+      })}{usersLoading && !users.length ? <tr><td colSpan={canManageRoster ? 5 : 4} className="admin-empty">Loading recorded application users…</td></tr> : null}{!usersLoading && !usersError && usersLoaded && !users.length ? <tr><td colSpan={canManageRoster ? 5 : 4} className="admin-empty">No recorded application users yet.</td></tr> : null}</tbody></table></div></Card>
     </section>
+    <section id="admin-panel-reviews" role="tabpanel" aria-labelledby="admin-tab-reviews" hidden={activeSection !== "reviews"} className="admin-tab-panel">{activeSection === "reviews" ? <ServiceCatalogApprovalQueue /> : null}</section>
     <section id="admin-panel-tokens" role="tabpanel" aria-labelledby="admin-tab-tokens" hidden={activeSection !== "tokens"} className="admin-tab-panel">
       <Card className="admin-card admin-token-card"><div className="card-heading"><div><p className="eyebrow">Direct API access</p><h2><KeyRound size={18} />Scoped tokens</h2><p className="admin-card-note">Choose the smallest scope set required. “Unrevoked” indicates only that this recorded token is neither revoked nor past its recorded expiry; it is not a live authorization decision.</p></div><Badge tone="neutral">{tokensLoading ? "Loading" : `${unrevokedTokenCount} unrevoked · ${revokedTokenCount} revoked${expiredTokenCount ? ` · ${expiredTokenCount} expired` : ""}`}</Badge></div>{tokensError ? <p className="admin-error" role="alert">{tokensError}</p> : null}<div className="admin-form"><label>Name<input value={tokenName} onChange={(event) => setTokenName(event.target.value)} /></label><label>Expires in days<input type="number" min={1} max={90} value={tokenDays} onChange={(event) => { const next = Number(event.target.value); setTokenDays(Number.isFinite(next) ? next : 0); }} /><small>{Number.isInteger(tokenDays) && tokenDays >= 1 && tokenDays <= 90 ? `Expires after ${tokenDays} day${tokenDays === 1 ? "" : "s"}; maximum 90 days.` : "Enter a whole number from 1 to 90."}</small></label><fieldset><legend>Scope presets</legend><div className="scope-presets">{Object.entries(scopePresets).map(([label, preset]) => <button type="button" key={label} onClick={() => setSelectedScopes([...preset])}>{label}</button>)}</div></fieldset><fieldset><legend>Scopes</legend>{scopes.map((scope) => <label key={scope} className="scope-option"><input type="checkbox" checked={selectedScopes.includes(scope)} onChange={() => setSelectedScopes((current) => current.includes(scope) ? current.filter((value) => value !== scope) : [...current, scope])} /><span><code>{scope}</code><small>{scopeHelp[scope]}</small></span></label>)}</fieldset><button className="primary-button" type="button" onClick={() => void createToken()} disabled={!tokenName.trim() || !selectedScopes.length || !Number.isInteger(tokenDays) || tokenDays < 1 || tokenDays > 90}><KeyRound size={16} />Generate token</button>{issuedToken && <div className="issued-token"><strong>Copy now — this token will not be shown again.</strong><code>{issuedToken}</code><button type="button" onClick={() => void navigator.clipboard.writeText(issuedToken)}><Clipboard size={14} />Copy token</button></div>}</div><div className="token-list">{tokens.map((token) => { const state = tokenState(token); return <article key={token.id}><div><strong>{token.name}</strong><code>{token.token_prefix}…</code><small>{token.scopes.join(" · ")}</small><small>Created {new Date(token.created_at).toLocaleDateString()} · expires {new Date(token.expires_at).toLocaleDateString() } · last used {token.last_used_at ? new Date(token.last_used_at).toLocaleDateString() : "never"}</small></div><div className="token-actions"><Badge tone={state === "Revoked" ? "danger" : state === "Expired" ? "warning" : "neutral"}>{state}</Badge>{state === "Unrevoked" ? <button type="button" disabled={revokingToken === token.id} onClick={() => { setDialogError(""); setPendingToken(token); }}>{revokingToken === token.id ? "Revoking…" : "Revoke"}</button> : null}</div></article>; })}{tokensLoading && !tokens.length ? <p className="admin-empty">Loading scoped tokens…</p> : null}{!tokensLoading && !tokensError && tokensLoaded && !tokens.length ? <p className="admin-empty">No API tokens have been issued.</p> : null}</div></Card>
     </section>

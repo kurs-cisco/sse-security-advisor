@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from datetime import date
 from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from cbom_catalog import access_control, api
 
@@ -70,6 +71,24 @@ class OidcGroupPolicyTests(TestCase):
         self.assertEqual(selected["active_mode"], "product_engineer")
         self.assertEqual({row["access"] for row in selected["grants"]}, {"engineer"})
 
+    def test_roster_snapshot_retains_admin_entitlement_after_lead_selection(self) -> None:
+        principal = api.Principal(
+            kind="human", subject="oidc:admin-lead", role="viewer", scopes=frozenset(),
+            oidc_groups=frozenset({"fedsse-admins", "fedsse-team-a-leads"}), user_id=7,
+        )
+        assigned = api._apply_access_mode(
+            self._scope({"fedsse-admins", "fedsse-team-a-leads"}), "product_lead",
+        )
+        database = MagicMock()
+        with patch.object(api, "_access_roster_enabled", return_value=True), \
+             patch.object(api, "api_connection") as connection, \
+             patch.object(api, "record_snapshot") as record:
+            connection.return_value.__enter__.return_value = database
+            api._record_access_roster_snapshot(principal, assigned)
+        self.assertEqual(record.call_args.kwargs["effective_role"], "lead")
+        self.assertTrue(record.call_args.kwargs["verified_admin"])
+        database.commit.assert_called_once()
+
     def test_product_lead_keeps_pair_level_write_boundaries(self) -> None:
         base = self._scope({"fedsse-team-a-leads", "fedsse-team-b-engineers"})
         selected = api._apply_access_mode(base, "product_lead")
@@ -108,6 +127,7 @@ class OidcGroupPolicyTests(TestCase):
         with patch.object(api, "_fetch_all", return_value=[]) as fetch:
             self.assertEqual(api.admin_users(request), {"items": [], "total": 0})
         self.assertIn("app_user.oidc_subject IS NOT NULL", fetch.call_args.args[0])
+        self.assertIn("snapshot.verified_admin", fetch.call_args.args[0])
 
     def test_roster_mutation_is_denied_when_the_feature_is_disabled(self) -> None:
         principal = api.Principal(
@@ -133,6 +153,56 @@ class OidcGroupPolicyTests(TestCase):
             response = api.portfolio_overview_summary(request)
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'"scope":"portfolio-summary"', response.body)
+
+    def test_portfolio_overview_projection_excludes_identifier_bearing_data(self) -> None:
+        """A Summary response may contain counts and generic categories only."""
+        overview = {
+            "counts": {
+                "source_files": 12,
+                "crypto_component_occurrences": 3,
+                "internal_service_name": "dns-platform",
+                "enabled": True,
+                "nested": {"document": "private-sbom.json"},
+            },
+            "format_coverage": [
+                {"format_name": "CycloneDX JSON", "source_files": 7, "source_path": "private-sbom.json"},
+                {"document_kind": "SPDX", "source_files": 3, "document_name": "internal.spdx"},
+                {"format_name": "Internal proprietary format", "source_files": 2, "source_path": "restricted.csv"},
+            ],
+            "component_types": [
+                {"component_type": "library", "unique_components": 4, "component_name": "OpenSSL 3.1.2"},
+                {"component_type": "service", "unique_components": 1, "service_name": "dns-platform"},
+                {"component_type": "private-internal-type", "unique_components": 2, "component_name": "internal-crypto"},
+            ],
+            "service_groups": [{"slug": "dns-platform", "display_name": "DNS Platform"}],
+            "top_crypto_libraries": [{"name": "OpenSSL", "version": "3.1.2"}],
+        }
+
+        payload = api._portfolio_overview_summary(overview)
+
+        self.assertEqual(set(payload), {"scope", "counts", "format_coverage", "component_types"})
+        self.assertEqual(payload["scope"], "portfolio-summary")
+        self.assertEqual(payload["counts"], {"source_files": 12, "crypto_component_occurrences": 3})
+        self.assertEqual(
+            payload["format_coverage"],
+            [
+                {"format": "CycloneDX", "count": 7},
+                {"format": "SPDX", "count": 3},
+                {"format": "OSCAL", "count": 0},
+                {"format": "Other", "count": 2},
+            ],
+        )
+        self.assertEqual(
+            payload["component_types"],
+            [
+                {"component_type": "library", "count": 4},
+                {"component_type": "service", "count": 1},
+                {"component_type": "unknown", "count": 2},
+            ],
+        )
+        serialized = json.dumps(payload)
+        for identifier in ("dns-platform", "DNS Platform", "private-sbom.json", "internal.spdx", "restricted.csv", "OpenSSL", "3.1.2", "internal-crypto"):
+            self.assertNotIn(identifier, serialized)
 
     def test_shared_ato_does_not_grant_another_service(self) -> None:
         assigned = self._scope({"fedsse-team-a-leads"})
@@ -230,6 +300,19 @@ class OidcGroupPolicyTests(TestCase):
         request.method = "POST"
         self.assertFalse(api._request_within_assigned_scope(request, assigned))
 
+    def test_shared_planning_is_read_only_for_each_dashboard_role(self) -> None:
+        for path in ("/api/v1/portfolio/poam-planning", "/api/v1/portfolio/risk-assessment-poam"):
+            request = SimpleNamespace(url=SimpleNamespace(path=path), method="GET", query_params={})
+            for mode, role in (("portfolio", "admin"), ("assigned", "lead"), ("assigned", "engineer"), ("summary", "summary")):
+                with self.subTest(path=path, mode=mode, role=role):
+                    assigned = {"mode": mode, "role": role, "summary_access": True, "grants": []}
+                    self.assertTrue(api._request_within_assigned_scope(request, assigned))
+                    request.method = "POST"
+                    self.assertFalse(api._request_within_assigned_scope(request, assigned))
+                    request.method = "PUT"
+                    self.assertFalse(api._request_within_assigned_scope(request, assigned))
+                    request.method = "GET"
+
     def test_summary_user_cannot_read_direct_catalog_or_export_routes(self) -> None:
         assigned = {"mode": "summary", "role": "viewer", "summary_access": True, "grants": []}
         for path in ("/api/v1/documents/42", "/api/v1/fips/poam.csv"):
@@ -294,11 +377,16 @@ class OidcGroupPolicyTests(TestCase):
             })
 
         external = api.Principal(kind="human", subject="oidc:external", role="viewer", scopes=frozenset(), oidc_groups=frozenset({"fedsse-external"}))
+        scr2 = api.Principal(kind="human", subject="oidc:scr2", role="viewer", scopes=frozenset(), oidc_groups=frozenset({"fedsse-scr2-leads"}))
         admin = api.Principal(kind="human", subject="oidc:admin", role="viewer", scopes=frozenset(), oidc_groups=frozenset({"fedsse-admins"}))
         with patch.dict(os.environ, {"CBOM_OIDC_GROUP_SCOPE_JSON": json.dumps(POLICY)}, clear=False):
             with patch.object(api, "_rate_limited", return_value=False):
                 with patch.object(api, "authenticate_request", return_value=external):
                     self.assertEqual(asyncio.run(api.access_controls(request("/api/v1/portfolio/overview-summary"), next_handler)).status_code, 200)
+                    self.assertEqual(asyncio.run(api.access_controls(request("/api/v1/portfolio/poam-planning"), next_handler)).status_code, 200)
+                    self.assertEqual(asyncio.run(api.access_controls(request("/api/v1/portfolio/risk-assessment-poam"), next_handler)).status_code, 200)
+                    self.assertEqual(asyncio.run(api.access_controls(request("/api/v1/fips/team-milestones"), next_handler)).status_code, 403)
+                    self.assertEqual(asyncio.run(api.access_controls(request("/api/v1/service-catalog"), next_handler)).status_code, 403)
                     self.assertEqual(asyncio.run(api.access_controls(request("/api/v1/documents"), next_handler)).status_code, 403)
                     self.assertEqual(asyncio.run(api.access_controls(request("/api/v1/documents/42"), next_handler)).status_code, 404)
                     self.assertEqual(asyncio.run(api.access_controls(request("/api/v1/fips/poam.csv"), next_handler)).status_code, 403)
@@ -306,6 +394,207 @@ class OidcGroupPolicyTests(TestCase):
                     self.assertEqual(asyncio.run(api.access_controls(request("/api/v1/portfolio/product-scope-status"), next_handler)).status_code, 403)
                 with patch.object(api, "authenticate_request", return_value=admin):
                     self.assertEqual(asyncio.run(api.access_controls(request("/api/v1/admin/users"), next_handler)).status_code, 200)
+                with patch.object(api, "authenticate_request", return_value=scr2):
+                    self.assertEqual(asyncio.run(api.access_controls(request("/api/v1/portfolio/poam-planning"), next_handler)).status_code, 200)
+                    self.assertEqual(asyncio.run(api.access_controls(request("/api/v1/portfolio/risk-assessment-poam"), next_handler)).status_code, 200)
+                    self.assertEqual(asyncio.run(api.access_controls(request("/api/v1/inventory/service-groups"), next_handler)).status_code, 403)
+                    self.assertEqual(asyncio.run(api.access_controls(request("/api/v1/admin/users"), next_handler)).status_code, 403)
+
+    def test_shared_planning_projection_excludes_catalog_permissions_and_evidence(self) -> None:
+        catalog_row = {
+            "service_key": "sse-cboms/on-prem-clients", "source_collection": "sse-cboms",
+            "service_group": "on-prem-clients", "display_name": "Chromebook Client",
+            "owner": "Owner", "lead": "Lead", "il2": {"status": "planned", "date": date(2027, 1, 15)},
+            "il5": {"status": "in_progress", "date": date(2027, 3, 31)},
+            "service_impact_risk": "moderate", "comments": "Owner planning",
+            "can_edit": True, "can_approve": True, "owner_profile": {"email": "private@example.test"},
+            "attributes": {"internal": "do not publish"},
+        }
+        request = SimpleNamespace()
+        with patch.object(api, "_catalog_rows", return_value=[catalog_row]) as rows, \
+             patch.object(api, "_fetch_all", return_value=[{"service_key": "sse-cboms/on-prem-clients", "documents": 0}]), \
+             patch.object(api, "_active_target_module_contract", return_value=None), \
+             patch.object(api, "team_milestones", return_value={"groups": [], "all_tracker_rows": []}):
+            response = api.portfolio_poam_planning(request)
+        rows.assert_called_once_with(request, "sse-cboms", portfolio_planning=True)
+        payload = json.loads(response.body)
+        self.assertEqual(payload["scope"], "portfolio-planning")
+        self.assertEqual(payload["catalog"][0]["display_name"], "Chromebook Client")
+        self.assertEqual(payload["catalog"][0]["il2"]["date"], "2027-01-15")
+        self.assertEqual(payload["catalog"][0]["il5"]["date"], "2027-03-31")
+        self.assertNotIn("can_edit", payload["catalog"][0])
+        self.assertNotIn("owner_profile", payload["catalog"][0])
+        self.assertNotIn("attributes", payload["catalog"][0])
+        self.assertEqual(payload["document_counts"], [{"service_key": "sse-cboms/on-prem-clients", "documents": 0}])
+
+    def test_risk_assessment_poam_is_aggregate_planning_drafts(self) -> None:
+        catalog = [
+            {
+                "source_collection": "sse-cboms", "service_group": "avengers",
+                "display_name": "Avengers", "owner": "Owner", "lead": "Lead",
+                "service_impact_risk": "Critical",
+                "il2": {"status": "planned", "date": date(2026, 10, 31)},
+                "il5": {"status": "not_supplied", "date": None},
+                "can_edit": True, "owner_profile": {"email": "private@example.test"},
+            },
+            {
+                "source_collection": "sse-cboms", "service_group": "data-platform",
+                "display_name": "Data Platform", "owner": "Owner", "lead": "Lead",
+                "service_impact_risk": "Moderate",
+                "il2": {"status": "in_progress", "date": "2026-12-31"},
+                "il5": {"status": "not_supplied", "date": None},
+            },
+            {
+                "source_collection": "sse-cboms", "service_group": "ios-no-cbom",
+                "display_name": "iOS", "owner": "Owner", "lead": "Lead",
+                "service_impact_risk": "High",
+                "il2": {"status": "complete", "date": "2027-03-31"},
+                "il5": {"status": "not_supplied", "date": None},
+            },
+            {
+                "source_collection": "sse-cboms", "service_group": "blocked-october-plan",
+                "display_name": "Blocked October Plan", "owner": "Owner", "lead": "Lead",
+                "service_impact_risk": "Medium",
+                "il2": {"status": "blocked", "date": "2026-10-15"},
+                "il5": {"status": "not_supplied", "date": None},
+            },
+            {
+                "source_collection": "sse-cboms", "service_group": "dns-platform",
+                "display_name": "DNS Platform", "owner": "Owner", "lead": "Lead",
+                "service_impact_risk": None,
+                "il2": {"status": "not_supplied", "date": None},
+                "il5": {"status": "not_supplied", "date": None},
+            },
+            {
+                # This group appears in the stale tracker October wave below,
+                # but its current authoritative Catalog date is September.
+                "source_collection": "sse-cboms", "service_group": "stale-tracker-group",
+                "display_name": "Stale Tracker Group", "owner": "Owner", "lead": "Lead",
+                "il2": {"status": "dated", "date": "2026-09-30"},
+                "il5": {"status": "not_supplied", "date": None},
+            },
+            {
+                # A stale target date must not override an explicit N/A status.
+                "source_collection": "sse-cboms", "service_group": "not-applicable-stale-date",
+                "display_name": "N/A stale date", "owner": "Owner", "lead": "Lead",
+                "il2": {"status": "not_applicable", "date": "2026-10-31"},
+                "il5": {"status": "not_supplied", "date": None},
+            },
+        ]
+        request = SimpleNamespace()
+        with (
+            patch.object(api, "_catalog_rows", return_value=catalog) as rows,
+            patch.object(api, "_fetch_all", return_value=[
+                {"service_key": "sse-cboms/avengers", "documents": 4},
+                {"service_key": "sse-cboms/blocked-october-plan", "documents": 2},
+                {"service_key": "sse-cboms/data-platform", "documents": 3},
+                {"service_key": "sse-cboms/ios-no-cbom", "documents": 1},
+                {"service_key": "sse-cboms/dns-platform", "documents": 5},
+                {"service_key": "sse-cboms/stale-tracker-group", "documents": 9},
+                {"service_key": "sse-cboms/not-applicable-stale-date", "documents": 9},
+            ]),
+            patch.object(
+                api, "portfolio_delivery_waves",
+                side_effect=AssertionError("stale tracker waves must not select Catalog links"),
+            ),
+        ):
+            response = api.portfolio_risk_assessment_poam(request)
+            catalog[0]["il2"]["date"] = date(2026, 12, 15)
+            catalog[0]["service_impact_risk"] = "Moderate"
+            refreshed_response = api.portfolio_risk_assessment_poam(request)
+        self.assertEqual(rows.call_count, 2)
+        payload = json.loads(response.body)
+        refreshed = json.loads(refreshed_response.body)
+        self.assertEqual(payload["scope"], "portfolio-summary")
+        self.assertEqual(payload["assessment_state"], "not_assessable")
+        self.assertEqual(payload["items"][0]["milestones"][0]["target_date"], None)
+        self.assertEqual(payload["items"][0]["milestones"][0]["label"], "October 2026 planning window")
+        self.assertEqual([item["id"] for item in payload["items"]], [
+            "OWNER-DRAFT-OCT-2026", "OWNER-DRAFT-DEC-2026",
+            "OWNER-DRAFT-MAR-2027-VENDOR", "OWNER-DRAFT-DNSCRYPT",
+        ])
+        for item in payload["items"][:3]:
+            self.assertEqual(item["kind"], "owner_directed_draft_deviation")
+            self.assertEqual(item["control_id"], "SC-13")
+            self.assertEqual(item["control_mapping_assertion"], "owner_proposed")
+            self.assertEqual(item["risk"], {"value": "Moderate", "assertion": "user_asserted"})
+            self.assertFalse(item["poam_eligibility"])
+            self.assertEqual(item["status"], "owner_directed_draft_deviation")
+            self.assertNotIn("candidates", item)
+            self.assertNotIn("export", item)
+        self.assertEqual(payload["items"][0]["impact_summary"], {
+            "critical": {"service_group_count": 1, "catalog_record_count": 4},
+            "moderate": {"service_group_count": 1, "catalog_record_count": 2},
+            "other": {"service_group_count": 0, "catalog_record_count": 0},
+            "total": {"service_group_count": 2, "catalog_record_count": 6},
+        })
+        self.assertEqual(payload["items"][1]["impact_summary"]["moderate"], {
+            "service_group_count": 1, "catalog_record_count": 3,
+        })
+        self.assertEqual(refreshed["items"][0]["impact_summary"]["total"]["service_group_count"], 1)
+        self.assertEqual(refreshed["items"][1]["impact_summary"]["moderate"], {
+            "service_group_count": 2, "catalog_record_count": 7,
+        })
+        for item in payload["items"]:
+            self.assertNotIn("linked_service_groups", item)
+        serialized_items = json.dumps(payload["items"])
+        self.assertNotIn("stale-tracker-group", serialized_items)
+        self.assertNotIn("not-applicable-stale-date", serialized_items)
+        self.assertNotIn("private@example.test", serialized_items)
+        march = payload["items"][2]
+        self.assertEqual(march["impact_summary"]["critical"], {
+            "service_group_count": 1, "catalog_record_count": 1,
+        })
+        self.assertIn("no verified deployment", march["deviations"][0]["detail"])
+        dnscrypt = payload["items"][3]
+        self.assertEqual(dnscrypt["impact_summary"]["other"], {
+            "service_group_count": 1, "catalog_record_count": 5,
+        })
+        self.assertIsNone(dnscrypt["milestones"][0]["target_date"])
+        self.assertEqual(dnscrypt["control_id"], "Pending mapping")
+        self.assertEqual(dnscrypt["control_mapping_assertion"], "pending_assessment")
+        self.assertEqual(dnscrypt["risk"], {"value": "Not rated", "assertion": "pending_assessment"})
+        self.assertFalse(dnscrypt["poam_eligibility"])
+        self.assertEqual(len(dnscrypt["deviations"]), 2)
+        self.assertIn("raw-ECDH to HKDF", dnscrypt["deviations"][0]["detail"])
+        self.assertEqual(
+            dnscrypt["deviations"][0]["reference_url"],
+            "https://cisco-sbg.atlassian.net/wiki/spaces/trac3/pages/1516647476/DNSCrypt+ES3+to+ES4+Key+Derivation+and+the+FIPS+140-3+Gap",
+        )
+        self.assertEqual(dnscrypt["deviations"][0]["artifact"]["reference_status"], "user_provided_discussion_reference_only")
+        self.assertIn("Ed25519/Ed448", dnscrypt["deviations"][1]["title"])
+        self.assertFalse(dnscrypt["deviations"][1]["poam_eligibility"])
+
+    def test_enabled_roster_blocks_revoked_human_before_handler_and_allows_restore(self) -> None:
+        handled: list[str] = []
+
+        async def next_handler(_request):
+            handled.append("called")
+            return api.JSONResponse({"ok": True})
+
+        def request():
+            return api.Request({
+                "type": "http", "method": "GET", "path": "/api/v1/auth/me",
+                "query_string": b"", "headers": [], "scheme": "http",
+                "server": ("test", 80), "client": ("127.0.0.1", 1000),
+            })
+
+        principal = api.Principal(
+            kind="human", subject="oidc:restored", role="viewer", scopes=frozenset(),
+            oidc_groups=frozenset({"fedsse-admins"}), user_id=7,
+        )
+        with (
+            patch.dict(os.environ, {"CBOM_OIDC_GROUP_SCOPE_JSON": json.dumps(POLICY)}, clear=False),
+            patch.object(api, "authenticate_request", return_value=principal),
+            patch.object(api, "_access_roster_enabled", return_value=True),
+            patch.object(api, "_access_is_revoked", side_effect=(True, False)),
+            patch.object(api, "_record_access_roster_snapshot"),
+            patch.object(api, "_rate_limited", return_value=False),
+        ):
+            self.assertEqual(asyncio.run(api.access_controls(request(), next_handler)).status_code, 403)
+            self.assertEqual(handled, [])
+            self.assertEqual(asyncio.run(api.access_controls(request(), next_handler)).status_code, 200)
+            self.assertEqual(handled, ["called"])
 
     def test_multiple_modes_must_be_selected_before_catalog_data(self) -> None:
         async def next_handler(_request):
@@ -335,6 +624,106 @@ class OidcGroupPolicyTests(TestCase):
                 self.assertEqual(asyncio.run(api.access_controls(chosen, next_handler)).status_code, 200)
                 self.assertEqual(chosen.state.assigned_scope["role"], "engineer")
                 self.assertEqual({item["access"] for item in chosen.state.assigned_scope["grants"]}, {"engineer"})
+
+    def test_multimode_profile_keeps_product_grants_and_deduplicates_services(self) -> None:
+        """A user with the Kurs group combination can select each exact mode.
+
+        Two product contexts remain separate grants, while the profile's
+        service register names each collection/service pair once.
+        """
+        policy = {
+            "version": "kurs-multimode-v1",
+            "groups": {
+                "fedsse-admins": {"access": "admin"},
+                "fedsse-scr2-leads": {"access": "summary"},
+            },
+        }
+        product_scopes = [
+            ("secure-access-government", "FedRAMP High/IL2"),
+            ("secure-access-defense", "IL5"),
+        ]
+        for service in ("dlp", "saasapi"):
+            grants = [
+                {
+                    "source_collection": "sse-cboms",
+                    "service_group": service,
+                    "product_scope_id": product_scope_id,
+                    "boundary_name": boundary_name,
+                }
+                for product_scope_id, boundary_name in product_scopes
+            ]
+            policy["groups"][f"fedsse-{service}-leads"] = {
+                "access": "lead", "service_key": service, "grants": grants,
+            }
+            policy["groups"][f"fedsse-{service}-engineers"] = {
+                "access": "engineer", "service_key": service, "grants": grants,
+            }
+
+        principal = api.Principal(
+            kind="human", subject="oidc:kurs", role="viewer", scopes=frozenset(),
+            oidc_groups=frozenset({
+                "fedsse-admins", "fedsse-scr2-leads",
+                "fedsse-dlp-leads", "fedsse-dlp-engineers",
+                "fedsse-saasapi-leads", "fedsse-saasapi-engineers",
+            }),
+        )
+
+        async def next_handler(_request):
+            return api.JSONResponse({"ok": True})
+
+        def request(mode: str | None = None):
+            headers = [] if mode is None else [(b"x-cbom-access-mode", mode.encode())]
+            return api.Request({
+                "type": "http", "method": "GET", "path": "/api/v1/auth/me",
+                "query_string": b"", "headers": headers, "scheme": "http",
+                "server": ("test", 80), "client": ("127.0.0.1", 1000),
+            })
+
+        with (
+            patch.dict(os.environ, {"CBOM_OIDC_GROUP_SCOPE_JSON": json.dumps(policy)}, clear=False),
+            patch.object(api, "authenticate_request", return_value=principal),
+            patch.object(api, "_rate_limited", return_value=False),
+            patch.object(api, "_fetch_all", return_value=[
+                {"source_collection": "sse-cboms", "service_group": "dlp"},
+                {"source_collection": "sse-cboms", "service_group": "saasapi"},
+            ]),
+        ):
+            unselected = request()
+            self.assertEqual(asyncio.run(api.access_controls(unselected, next_handler)).status_code, 200)
+            profile = api.current_user(unselected)
+            self.assertEqual(profile["access"]["available_modes"], [
+                "admin", "product_lead", "product_engineer", "summary",
+            ])
+            self.assertEqual(profile["access"]["default_mode"], "admin")
+            self.assertIsNone(profile["access"]["active_mode"])
+            self.assertEqual(profile["access"]["effective_role"], "none")
+            self.assertEqual(len(profile["access"]["grants"]), 4)
+            self.assertEqual(profile["assigned_scope"]["service_groups"], [
+                "sse-cboms/dlp", "sse-cboms/saasapi",
+            ])
+
+            expectations = {
+                "admin": ("admin", "portfolio", {"lead"}),
+                "product_lead": ("lead", "assigned", {"lead"}),
+                "product_engineer": ("engineer", "assigned", {"engineer"}),
+                "summary": ("summary", "summary", set()),
+            }
+            for mode, (role, scope_mode, grant_access) in expectations.items():
+                with self.subTest(mode=mode):
+                    selected = request(mode)
+                    self.assertEqual(asyncio.run(api.access_controls(selected, next_handler)).status_code, 200)
+                    selected_profile = api.current_user(selected)
+                    self.assertEqual(selected_profile["access"]["effective_role"], role)
+                    self.assertEqual(selected_profile["access"]["active_mode"], mode)
+                    self.assertEqual(selected_profile["assigned_scope"]["mode"], scope_mode)
+                    self.assertEqual(
+                        {grant["access"] for grant in selected_profile["access"]["grants"]},
+                        grant_access,
+                    )
+                    if mode in {"product_lead", "product_engineer"}:
+                        self.assertEqual(selected_profile["assigned_scope"]["service_groups"], [
+                            "sse-cboms/dlp", "sse-cboms/saasapi",
+                        ])
 
     def test_exact_product_lead_post_routes_resolve_scope_without_broadening_posts(self) -> None:
         async def next_handler(_request):

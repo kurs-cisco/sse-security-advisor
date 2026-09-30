@@ -63,7 +63,7 @@ cbom-catalog/snapshots/*
 /FIPS-140-3-21-sept.json
 /service_impact.csv
 /fips_140_3_detailed_schedule.html
-cbom-catalog/evidence/*.json
+cbom-catalog/evidence/
 
 # Raw externally shared assessment exports are local evidence, not source.
 /trac3-*.pdf

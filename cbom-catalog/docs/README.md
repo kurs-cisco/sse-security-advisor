@@ -63,6 +63,15 @@ records for evidence about a dated event:
   [Overview restoration](CHANGE_RECORD_2026-09-28_OVERVIEW_RESTORE.md),
   [Service Catalog](CHANGE_RECORD_2026-09-28_SERVICE_CATALOG.md), and
   [UI/UX rollout](CHANGE_RECORD_2026-09-28_UI_UX_ROLLOUT.md).
+- 2026-09-29 releases: [OIDC scope and workspaces](CHANGE_RECORD_2026-09-29_OIDC_SCOPE_RELEASE.md),
+  [Admin edit and review](CHANGE_RECORD_2026-09-29_ADMIN_EDIT_FIX.md),
+  [Service Catalog edit](CHANGE_RECORD_2026-09-29_CATALOG_EDIT_500_FIX.md),
+  [POA&M loading](CHANGE_RECORD_2026-09-29_POAM_LOADING_RELEASE.md), and
+  [shared POA&M planning](CHANGE_RECORD_2026-09-29_SHARED_POAM_PLANNING.md).
+- 2026-09-30 releases: [shared Planning serialization](CHANGE_RECORD_2026-09-30_SHARED_PLANNING_SERIALIZATION.md),
+  [crypto-module planning](CHANGE_RECORD_2026-09-30_CRYPTO_MODULE_PLANNING.md),
+  [POA&M impact view](CHANGE_RECORD_2026-09-30_POAM_IMPACT_VIEW.md), and
+  [Summary rendering](CHANGE_RECORD_2026-09-30_SUMMARY_RENDERING.md).
 
 The generated truth remains the database plus the externally retained source bytes. These
 documents describe both the pipeline and identified snapshot baselines. Refresh

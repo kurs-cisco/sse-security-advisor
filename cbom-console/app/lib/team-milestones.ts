@@ -22,6 +22,46 @@ export type TargetModuleRecord = {
   target_cmvp_cert: string | null;
   target_disposition: "active_certificate" | "cmvp_in_process" | "planned_unverified" | "not_supplied" | "not_applicable" | "not_determined";
   disposition_basis: string;
+  /**
+   * A non-persistent Service Catalog planning overlay. The imported tracker
+   * assertion above remains intact; these fields only describe the selected
+   * catalog plan and any exact public-reference match it has.
+   */
+  effective_target_module?: string | null;
+  effective_target_version?: string | null;
+  effective_target_cmvp_cert?: string | null;
+  effective_target_disposition?: "active_certificate" | "cmvp_in_process" | "planned_unverified" | "not_supplied" | "not_applicable" | "not_determined";
+  effective_disposition_basis?: string | null;
+  planning_origin?: "catalog_only" | string | null;
+  catalog_crypto_module_plan?: {
+    source_record_sha256?: string | null;
+    target_module?: string | null;
+    target_version?: string | null;
+    cmvp_certificate?: string | null;
+    evidence_url?: string | null;
+    effective_target_disposition?: string;
+    effective_disposition_basis?: string;
+    linked_public_evidence?: {
+      source_kind?: string | null;
+      url?: string | null;
+      certificate_number?: string | null;
+      module_name?: string | null;
+      module_version?: string | null;
+      public_status?: string | null;
+    } | null;
+    projection_scope?: "imported_record" | "catalog_only" | string;
+  } | null;
+  /** Exact public CMVP references offered for Catalog review; never a state override. */
+  public_module_suggestions?: Array<{
+    module_name?: string | null;
+    module_version?: string | null;
+    certificate_number?: string | null;
+    public_status?: string | null;
+    source_url?: string | null;
+    source_title?: string | null;
+    source_kind?: string | null;
+    suggestion_basis?: string | null;
+  }>;
   reason: string | null;
   evidence_grade: "user_asserted";
   review_required: boolean;
@@ -52,6 +92,35 @@ export type TargetModuleRecord = {
     source_payload_sha256: string;
   }>;
 };
+
+/**
+ * Planning views show the approved Service Catalog overlay when present.
+ * These helpers deliberately leave imported target-module fields available so
+ * UI can distinguish a planning selection from deployment evidence.
+ */
+export function planningTargetModule(module: TargetModuleRecord) {
+  return module.effective_target_module ?? module.target_module;
+}
+
+export function planningTargetVersion(module: TargetModuleRecord) {
+  return module.effective_target_version ?? module.target_version;
+}
+
+export function planningTargetCertificate(module: TargetModuleRecord) {
+  return module.effective_target_cmvp_cert ?? module.target_cmvp_cert;
+}
+
+export function planningTargetDisposition(module: TargetModuleRecord) {
+  return module.effective_target_disposition ?? module.target_disposition;
+}
+
+export function planningDispositionBasis(module: TargetModuleRecord) {
+  return module.effective_disposition_basis ?? module.disposition_basis;
+}
+
+export function hasCatalogPlanningOverlay(module: TargetModuleRecord) {
+  return Boolean(module.catalog_crypto_module_plan || module.planning_origin === "catalog_only");
+}
 
 export type TeamTrackerRow = {
   team: string;

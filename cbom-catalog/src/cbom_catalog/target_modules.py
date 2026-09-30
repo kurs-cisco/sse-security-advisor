@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from copy import deepcopy
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -115,7 +116,7 @@ def _target_disposition(
     if target_module:
         return (
             "planned_unverified",
-            "A target module is named without a target certificate or CMVP pipeline state.",
+            "A target is named, but its exact approved module identity/version and linked CMVP certificate or pipeline reference are not supplied.",
         )
     if status == "not_applicable":
         return "not_applicable", "Source explicitly marks the module Not Applicable."
@@ -306,9 +307,374 @@ def _claim_value(row: dict[str, Any], field: str) -> Any:
 def _version_verdict(claimed: str | None, observed: str | None) -> str | None:
     if not claimed or not observed:
         return None
-    left = claimed.casefold().replace(" ", "")
-    right = observed.casefold().replace(" ", "")
-    return "corroborates" if right in left else "contradicts"
+    return "corroborates" if _exact_version_match(claimed, observed) else "contradicts"
+
+
+def _exact_version_match(claimed: str | None, observed: str | None) -> bool:
+    """Return true only for an explicit whole-version match.
+
+    This intentionally does not treat a Go toolchain patch release as its
+    embedded cryptographic-module version, and does not turn a library-family
+    name into a module identity.
+    """
+    if not claimed or not observed:
+        return False
+    return claimed.strip().casefold() == observed.strip().casefold()
+
+
+def _projected_evidence_grade(source_kind: str | None, recorded_grade: str | None) -> str | None:
+    """Keep legacy imported bytes intact while classifying vendor statements correctly."""
+    if source_kind in {"vendor_blog", "vendor_release_note"}:
+        return "curated_analysis"
+    return recorded_grade
+
+
+def _module_name_match(claimed: str | None, observed: str | None) -> bool:
+    """Compare declared module identities without accepting library-only hints."""
+    if not claimed or not observed:
+        return False
+    left = re.sub(r"[^a-z0-9]+", " ", claimed.casefold()).strip()
+    right = re.sub(r"[^a-z0-9]+", " ", observed.casefold()).strip()
+    return left == right
+
+
+def _exact_module_version_identity(
+    module_name: str | None,
+    module_version: str | None,
+    evidence: dict[str, Any],
+) -> bool:
+    """Recognize only an exact formal module and version identity.
+
+    A package named OpenSSL, a product name, or a toolchain version is not a
+    CMVP module identity. This tight predicate is used only to show a public
+    reference suggestion; it never changes a planning disposition.
+    """
+    evidence_version = _clean(evidence.get("module_version"))
+    return (
+        _module_name_match(module_name, _clean(evidence.get("module_name")))
+        and bool(module_version)
+        and bool(evidence_version)
+        and module_version.strip().casefold() == evidence_version.casefold()
+    )
+
+
+def public_module_suggestions(
+    module: dict[str, Any], public_evidence: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return exact active CMVP references that a reviewer may select in Catalog.
+
+    Suggestions are deliberately separate from imported assertions and from
+    effective planning disposition. They do not establish deployment,
+    operational environment, approved mode, or FIPS validation for a service.
+    """
+    candidates = [
+        (_clean(module.get("current_module")), _clean(module.get("current_version"))),
+        (_clean(module.get("target_module")), _clean(module.get("target_version"))),
+    ]
+    suggestions: list[dict[str, Any]] = []
+    for item in public_evidence:
+        if item.get("source_kind") != "cmvp_certificate" or item.get("public_status") != "active":
+            continue
+        if not any(
+            _exact_module_version_identity(name, version, item)
+            for name, version in candidates
+        ):
+            continue
+        suggestions.append(
+            {
+                "module_name": item.get("module_name"),
+                "module_version": item.get("module_version"),
+                "certificate_number": _certificate(item.get("certificate_number")),
+                "public_status": item.get("public_status"),
+                "source_url": item.get("source_url") or item.get("url"),
+                "source_title": item.get("source_title") or item.get("title"),
+                "source_kind": item.get("source_kind"),
+                "suggestion_basis": (
+                    "Exact formal module and version match to an active public CMVP certificate. "
+                    "Select and approve it in Service Catalog before using it as planning metadata; "
+                    "deployment and approved-mode evidence remain required."
+                ),
+            }
+        )
+    return sorted(
+        suggestions,
+        key=lambda row: (
+            str(row.get("module_name") or ""),
+            str(row.get("module_version") or ""),
+            str(row.get("certificate_number") or ""),
+        ),
+    )
+
+
+def evaluate_catalog_crypto_module_plan(
+    plan: dict[str, Any], public_evidence: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Evaluate a Service Catalog crypto-module plan against imported evidence.
+
+    Contract for the catalog overlay: ``target_module`` and ``target_version``
+    are required.  An active-certificate plan also supplies
+    ``cmvp_certificate``.  A pipeline plan supplies the exact ``evidence_url``
+    for a known vendor/CMVP source.  The returned disposition is suitable for
+    *planning display only*: it never establishes a deployed module match,
+    approved mode, or authorization status.
+
+    The caller owns authorization and persistence.  This function is pure so
+    rendering an overlay cannot modify imported target-module assertions.
+    """
+    target_module = _clean(plan.get("target_module"))
+    target_version = _clean(plan.get("target_version"))
+    certificate = _certificate(plan.get("cmvp_certificate"))
+    evidence_url = _clean(plan.get("evidence_url"))
+    preset_id = _clean(plan.get("target_preset_id"))
+    evidence_payload_sha256 = _clean(plan.get("evidence_payload_sha256"))
+    if not target_module or not target_version:
+        return {
+            "status": "planned_unverified",
+            "evidence_state": "evidence_superseded",
+            "basis": "The catalog plan needs an exact target module name and version.",
+            "evidence": None,
+        }
+    if not preset_id:
+        return {
+            "status": "planned_unverified",
+            "evidence_state": "user_asserted_unverified",
+            "basis": "This is a custom catalog target with a supporting URL; its module identity and lifecycle evidence require reviewer confirmation.",
+            "evidence": None,
+        }
+    if not evidence_payload_sha256:
+        return {
+            "status": "planned_unverified",
+            "evidence_state": "evidence_superseded",
+            "basis": "An approved target preset and its current evidence payload reference are required before this catalog plan can affect Planning.",
+            "evidence": None,
+        }
+
+    matching = [
+        item
+        for item in public_evidence
+        if _module_name_match(target_module, _clean(item.get("module_name")))
+        and _exact_version_match(target_version, _clean(item.get("module_version")))
+        and str(item.get("key") or item.get("evidence_key") or "") == preset_id
+        and str(item.get("payload_sha256") or item.get("evidence_payload_sha256") or "") == evidence_payload_sha256
+    ]
+    if certificate:
+        matching = [
+            item for item in matching
+            if _certificate(item.get("certificate_number")) == certificate
+            and item.get("source_kind") == "cmvp_certificate"
+            and item.get("public_status") == "active"
+        ]
+        if matching:
+            item = matching[0]
+            return {
+                "status": "active_certificate",
+                "evidence_state": "current",
+                "basis": (
+                    f"Catalog plan exactly matches linked CMVP certificate {certificate}; "
+                    "deployment, operational-environment, and approved-mode evidence remain required."
+                ),
+                "evidence": item,
+            }
+        return {
+            "status": "planned_unverified",
+            "evidence_state": "evidence_superseded",
+            "basis": "The supplied certificate does not exactly match an active imported CMVP module record.",
+            "evidence": None,
+        }
+
+    matching = [
+        item for item in matching
+        if evidence_url
+        and item.get("url") == evidence_url
+        and item.get("public_status") in {
+            "cmvp_in_process", "cmvp_review", "submission_planned_or_in_progress",
+        }
+    ]
+    if matching:
+        item = matching[0]
+        return {
+            "status": "cmvp_in_process",
+            "evidence_state": "current",
+            "basis": (
+                "Catalog plan exactly matches linked public CMVP pipeline evidence; "
+                "it is not an active validation certificate or deployment conclusion."
+            ),
+            "evidence": item,
+        }
+    return {
+        "status": "planned_unverified",
+        "evidence_state": "evidence_superseded",
+        "basis": "The approved target's evidence reference no longer matches active exact CMVP certificate or pipeline evidence; re-review the catalog plan.",
+        "evidence": None,
+    }
+
+
+def apply_catalog_crypto_module_plans(
+    planning: dict[str, Any],
+    catalog_rows: list[dict[str, Any]],
+    *,
+    public_evidence: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Return a non-persistent planning projection with catalog plan overlays.
+
+    ``catalog_rows`` are Service Catalog API rows.  Each row may carry
+    ``crypto_module_plans`` directly or inside ``attributes``.  A plan changes
+    an imported record's *effective planning display* only when it has an
+    exact ``source_record_sha256`` for that imported assertion.  Plans without
+    that identifier remain visible as catalog-only plans and never affect
+    imported target-module dispositions.
+
+    Required plan fields are defined by :func:`evaluate_catalog_crypto_module_plan`.
+    ``public_evidence`` should be the active external-evidence query, when
+    available; it allows a newly selected preset to be evaluated even before
+    any imported tracker assertion links to the same record.  The function also
+    uses evidence already linked to imported records as a fallback.
+    This function returns a deep copy and does not write the tracker import,
+    external evidence import, or Service Catalog row.
+    """
+    projected = deepcopy(planning)
+    planning_source_collection = _clean(
+        (projected.get("source") or {}).get("source_collection")
+    ) or str(TRACKER_SOURCE["source_collection"])
+    catalog_by_scope: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in catalog_rows:
+        group = _clean(row.get("service_group"))
+        collection = _clean(row.get("source_collection"))
+        if not group or not collection:
+            continue
+        attributes = row.get("attributes")
+        plans = row.get("crypto_module_plans")
+        if plans is None and isinstance(attributes, dict):
+            plans = attributes.get("crypto_module_plans")
+        if isinstance(plans, list):
+            catalog_by_scope.setdefault((collection, _slug(group)), []).extend(
+                plan for plan in plans if isinstance(plan, dict)
+            )
+
+    public_evidence_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for item in public_evidence or []:
+        if not isinstance(item, dict):
+            continue
+        key = (str(item.get("key") or item.get("evidence_key") or ""), str(item.get("url") or item.get("source_url") or ""))
+        if key == ("", ""):
+            continue
+        public_evidence_by_key[key] = {
+            "key": item.get("key") or item.get("evidence_key"),
+            "source_kind": item.get("source_kind"),
+            "url": item.get("url") or item.get("source_url"),
+            "certificate_number": item.get("certificate_number"),
+            "module_name": item.get("module_name"),
+            "module_version": item.get("module_version"),
+            "public_status": item.get("public_status"),
+            "payload_sha256": item.get("payload_sha256") or item.get("evidence_payload_sha256"),
+        }
+    for group in projected.get("groups", []):
+        for module in group.get("target_modules", []):
+            for linked in module.get("evidence", []):
+                observed = linked.get("observed_value")
+                if not isinstance(observed, dict):
+                    observed = {}
+                item = {
+                    "key": linked.get("source_locator"),
+                    "source_kind": linked.get("source_kind"),
+                    "url": linked.get("source_url"),
+                    "certificate_number": observed.get("certificate_number"),
+                    "module_name": observed.get("module_name"),
+                    "module_version": observed.get("module_version"),
+                    "public_status": observed.get("public_status"),
+                    "payload_sha256": linked.get("source_payload_sha256"),
+                }
+                key = (str(item.get("key") or ""), str(item.get("url") or ""))
+                if key != ("", ""):
+                    public_evidence_by_key[key] = item
+    public_evidence = list(public_evidence_by_key.values())
+
+    for group in projected.get("groups", []):
+        plans = catalog_by_scope.get(
+            (planning_source_collection, _slug(str(group.get("service_group") or ""))),
+            [],
+        )
+        if not plans:
+            continue
+        catalog_projection: list[dict[str, Any]] = []
+        modules_by_sha = {
+            str(module.get("record_sha256")): module
+            for module in group.get("target_modules", [])
+            if module.get("record_sha256")
+        }
+        for plan in plans:
+            evaluation = evaluate_catalog_crypto_module_plan(plan, public_evidence)
+            safe_evidence = evaluation.pop("evidence")
+            if safe_evidence:
+                safe_evidence = {
+                    "key": safe_evidence.get("key"),
+                    "source_kind": safe_evidence.get("source_kind"),
+                    "url": safe_evidence.get("url"),
+                    "certificate_number": safe_evidence.get("certificate_number"),
+                    "module_name": safe_evidence.get("module_name"),
+                    "module_version": safe_evidence.get("module_version"),
+                    "public_status": safe_evidence.get("public_status"),
+                }
+            source_record_sha256 = _clean(plan.get("source_record_sha256"))
+            module = modules_by_sha.get(str(source_record_sha256)) if source_record_sha256 else None
+            projected_plan = {
+                "source_record_sha256": source_record_sha256,
+                "target_preset_id": _clean(plan.get("target_preset_id")),
+                "target_module": _clean(plan.get("target_module")),
+                "target_version": _clean(plan.get("target_version")),
+                "cmvp_certificate": _certificate(plan.get("cmvp_certificate")),
+                "evidence_url": _clean(plan.get("evidence_url")),
+                "evidence_payload_sha256": _clean(plan.get("evidence_payload_sha256")),
+                "effective_target_disposition": evaluation["status"],
+                "evidence_state": evaluation["evidence_state"],
+                "effective_disposition_basis": evaluation["basis"],
+                "linked_public_evidence": safe_evidence,
+                "projection_scope": "imported_record" if module else "catalog_only",
+            }
+            catalog_projection.append(projected_plan)
+            if module is not None:
+                module["catalog_crypto_module_plan"] = projected_plan
+                module["effective_target_disposition"] = evaluation["status"]
+                module["effective_disposition_basis"] = evaluation["basis"]
+                # Preserve the imported assertion verbatim and expose the
+                # reviewed Catalog selection as an overlay for Planning views.
+                # A selected target may deliberately supersede an older
+                # free-text target in the imported tracker.
+                module["effective_target_module"] = projected_plan["target_module"]
+                module["effective_target_version"] = projected_plan["target_version"]
+                module["effective_target_cmvp_cert"] = projected_plan["cmvp_certificate"]
+            else:
+                # A Catalog plan is still useful when no imported record is
+                # available. Represent it as a separate planning row instead
+                # of altering a tracker import by inference.
+                plan_key = hashlib.sha256(
+                    json.dumps(projected_plan, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest()
+                group.setdefault("target_modules", []).append(
+                    {
+                        "planning_record_key": f"catalog-plan:{plan_key}",
+                        "record_sha256": None,
+                        "current_module": None,
+                        "current_version": None,
+                        "used_by": None,
+                        "target_module": projected_plan["target_module"],
+                        "target_version": projected_plan["target_version"],
+                        "target_cmvp_cert": projected_plan["cmvp_certificate"],
+                        "target_disposition": "planned_unverified",
+                        "disposition_basis": "Catalog-only planning assertion; no imported target-module record is linked.",
+                        "effective_target_disposition": evaluation["status"],
+                        "effective_disposition_basis": evaluation["basis"],
+                        "effective_target_module": projected_plan["target_module"],
+                        "effective_target_version": projected_plan["target_version"],
+                        "effective_target_cmvp_cert": projected_plan["cmvp_certificate"],
+                        "catalog_crypto_module_plan": projected_plan,
+                        "evidence_grade": "user_asserted",
+                        "review_required": True,
+                        "planning_origin": "catalog_only",
+                    }
+                )
+        group["catalog_crypto_module_plans"] = catalog_projection
+    return projected
 
 
 def _public_links(row: dict[str, Any], evidence: list[dict[str, Any]]) -> list[tuple[dict[str, Any], str, str, str, str]]:
@@ -330,10 +696,13 @@ def _public_links(row: dict[str, Any], evidence: list[dict[str, Any]]) -> list[t
                 links.append((item, "current_version", version_verdict, "name_version_match" if version_verdict == "corroborates" else "name_only", "Exact certified-module version comparison; no runtime or boundary inference."))
         key = item.get("evidence_key")
         if key == "openssl-3.5.4-submission" and row.get("normalized_status") == "pending_certification" and "openssl" in module_text:
-            verdict = "corroborates" if current_version and "3.5.4" in current_version else "contradicts"
+            verdict = "corroborates" if _exact_version_match(current_version, "3.5.4") else "contradicts"
             links.append((item, "target_public_status", verdict, "name_version_match" if verdict == "corroborates" else "name_only", "The public submission is version-specific to OpenSSL 3.5.4."))
-        if key == "go-fips140-doc" and ("go 1.26" in module_text or "gofips140" in module_text):
-            links.append((item, "target_public_status", "partially_corroborates", "name_only", "Official Go guidance supports module v1.26.0 in process, not a generic Go patch release or deployed mode."))
+        if key == "go-fips140-doc" and "gofips140" in module_text:
+            if _exact_version_match(row.get("target_module"), item.get("module_version")):
+                links.append((item, "target_module_identity", "corroborates", "name_version_match", "Official Go guidance corroborates the exact in-process Go Cryptographic Module version only; deployment and FIPS mode remain unverified."))
+            else:
+                links.append((item, "target_public_status", "partially_corroborates", "name_only", "Official Go guidance supports module v1.26.0 in process, not a generic Go patch release, GOFIPS140=latest, or deployed mode."))
         if key == "bouncycastle-java-fips" and ("bouncy" in module_text or "bc-fja" in module_text or "bc-fips" in module_text):
             links.append((item, "target_public_status", "partially_corroborates", "name_only", "Vendor lifecycle evidence requires exact provider/artifact boundary correlation."))
     return links
@@ -564,10 +933,24 @@ def load_active_target_modules(connection: Any) -> dict[str, Any] | None:
            ORDER BY e.target_module_id, e.claim_field, e.id""",
         (source["id"],),
     ).fetchall()
+    active_public_evidence_rows = connection.execute(
+        """SELECT external.evidence_key, external.source_kind, external.source_title,
+                  external.source_url, external.certificate_number, external.module_name,
+                  external.module_version, external.public_status
+           FROM target_module_external_evidence external
+           JOIN target_module_evidence_import imported ON imported.id = external.import_id
+           WHERE imported.is_active AND imported.evidence_set_kind = 'public_authority'
+           ORDER BY external.evidence_key"""
+    ).fetchall()
+    active_public_evidence = [dict(item) for item in active_public_evidence_rows]
     evidence_by_target: dict[int, list[dict[str, Any]]] = {}
     for raw_evidence in evidence_rows:
         evidence = dict(raw_evidence)
         target_id = int(evidence.pop("target_module_id"))
+        grade = _projected_evidence_grade(evidence.get("source_kind"), evidence.get("evidence_grade"))
+        if grade != evidence.get("evidence_grade"):
+            evidence["recorded_evidence_grade"] = evidence["evidence_grade"]
+            evidence["evidence_grade"] = grade
         for timestamp in ("retrieved_at", "published_at"):
             if evidence.get(timestamp):
                 evidence[timestamp] = evidence[timestamp].isoformat()
@@ -688,6 +1071,9 @@ def load_active_target_modules(connection: Any) -> dict[str, Any] | None:
             ],
         }
         module["evidence"] = module_evidence
+        module["public_module_suggestions"] = public_module_suggestions(
+            module, active_public_evidence
+        )
         team["modules"].append(module)
         for group_slug in service_groups:
             group = groups.setdefault(

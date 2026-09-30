@@ -83,6 +83,10 @@ test("deployment cannot activate detail-dependent writes without their scope pre
     /Administrator group mapping requires exact OIDC service-group grants/,
   );
   assert.throws(
+    () => deploymentEnvironment({ enableAccessRoster: true }),
+    /Access roster requires exact OIDC service-group grants/,
+  );
+  assert.throws(
     () => deploymentEnvironment({ enableProductScopedDetailEvidence: true }),
     /Product detail requires exact OIDC service-group grants/,
   );
@@ -100,6 +104,12 @@ test("Service Catalog activation reaches the API only with exact group policy", 
   const environment = deploymentEnvironment({ enableOidcServiceGroups: true, enableServiceCatalog: true });
   assert.equal(environment.api.CBOM_SERVICE_CATALOG_ENABLED, "true");
   assert.equal(environment.web.CBOM_SERVICE_CATALOG_ENABLED, undefined);
+});
+
+test("access roster activation reaches only the API with exact group policy", () => {
+  const environment = deploymentEnvironment({ enableOidcServiceGroups: true, enableAccessRoster: true });
+  assert.equal(environment.api.CBOM_ACCESS_ROSTER_ENABLED, "true");
+  assert.equal(environment.web.CBOM_ACCESS_ROSTER_ENABLED, undefined);
 });
 
 test("Admin mapping registry is explicitly enabled only with exact service-group policy", () => {

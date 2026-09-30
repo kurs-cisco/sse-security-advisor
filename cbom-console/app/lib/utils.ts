@@ -11,6 +11,7 @@ export function formatNumber(value: number | null | undefined) {
 
 export function serviceGroupDisplayName(value: string) {
   const withoutEvidenceSuffix = value.replace(/(?:-|_)NO(?:-|_)CBOM$/i, "");
+  if (/^(?:on-prem-clients|on prem \/ clients)$/i.test(withoutEvidenceSuffix)) return "Chromebook Client";
   return withoutEvidenceSuffix.toLocaleLowerCase() === "discovery" ? "Discovery" : withoutEvidenceSuffix;
 }
 

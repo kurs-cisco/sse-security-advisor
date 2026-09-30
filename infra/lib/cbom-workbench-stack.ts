@@ -157,6 +157,9 @@ export class CbomWorkbenchStack extends cdk.Stack {
     if (enableAdminGroupMapping && !enableOidcServiceGroups) {
       throw new Error("Administrator group mapping requires exact OIDC service-group grants");
     }
+    if (enableAccessRoster && !enableOidcServiceGroups) {
+      throw new Error("Access roster requires exact OIDC service-group grants");
+    }
     if (enableOperationalEvidenceNotes && !enableProductScopedDetailEvidence) {
       throw new Error("Operational evidence notes require product-scoped detail");
     }

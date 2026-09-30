@@ -16,22 +16,46 @@ class AccessRosterError(ValueError):
     pass
 
 
-def record_snapshot(database: Any, *, user_id: int, effective_role: str, grants: list[dict[str, Any]], policy_version: str, policy_fingerprint: str) -> None:
+def record_snapshot(
+    database: Any,
+    *,
+    user_id: int,
+    effective_role: str,
+    verified_admin: bool,
+    grants: list[dict[str, Any]],
+    policy_version: str,
+    policy_fingerprint: str,
+) -> None:
+    """Record a selected workspace and the independent verified Admin entitlement.
+
+    A person can select Product Lead or Product Engineer while still holding
+    the exact Admin group. The selected role is useful telemetry, but must not
+    make the last-Admin safeguard forget that entitlement.
+    """
     if effective_role not in _ROLES or not policy_version.strip() or not _FINGERPRINT.fullmatch(policy_fingerprint):
         raise AccessRosterError("Invalid verified access snapshot")
     canonical = json.loads(json.dumps(grants, sort_keys=True))
-    latest = database.execute("""SELECT effective_role, exact_grants, policy_version, policy_fingerprint, verified_at
+    latest = database.execute("""SELECT effective_role, verified_admin, exact_grants, policy_version, policy_fingerprint, verified_at
         FROM app_auth.access_roster_snapshot WHERE app_user_id = %s
         ORDER BY verified_at DESC, id DESC LIMIT 1""", (user_id,)).fetchone()
     verified_at = latest.get("verified_at") if latest else None
     if isinstance(verified_at, datetime) and verified_at.tzinfo is None:
         verified_at = verified_at.replace(tzinfo=UTC)
-    unchanged = latest and latest.get("effective_role") == effective_role and latest.get("exact_grants") == canonical and latest.get("policy_version") == policy_version and latest.get("policy_fingerprint") == policy_fingerprint
+    unchanged = (
+        latest
+        and latest.get("effective_role") == effective_role
+        and latest.get("verified_admin") == bool(verified_admin)
+        and latest.get("exact_grants") == canonical
+        and latest.get("policy_version") == policy_version
+        and latest.get("policy_fingerprint") == policy_fingerprint
+    )
     if unchanged and isinstance(verified_at, datetime) and verified_at >= datetime.now(UTC) - timedelta(minutes=15):
         return
     database.execute("""INSERT INTO app_auth.access_roster_snapshot
-        (app_user_id,effective_role,exact_grants,policy_version,policy_fingerprint)
-        VALUES (%s,%s,%s,%s,%s)""", (user_id, effective_role, Jsonb(canonical), policy_version, policy_fingerprint))
+        (app_user_id,effective_role,verified_admin,exact_grants,policy_version,policy_fingerprint)
+        VALUES (%s,%s,%s,%s,%s,%s)""",
+        (user_id, effective_role, verified_admin, Jsonb(canonical), policy_version, policy_fingerprint),
+    )
 
 
 def change_access(database: Any, *, actor_user_id: int, target_user_id: int, action: str, reason: str, request_id: str) -> None:
@@ -45,7 +69,7 @@ def change_access(database: Any, *, actor_user_id: int, target_user_id: int, act
     database.execute("SELECT pg_advisory_xact_lock(hashtext('cbom-user-access-actions'))")
     state = database.execute("""
         WITH latest_snapshot AS (
-            SELECT DISTINCT ON (app_user_id) app_user_id, effective_role, verified_at
+            SELECT DISTINCT ON (app_user_id) app_user_id, effective_role, verified_admin, verified_at
             FROM app_auth.access_roster_snapshot ORDER BY app_user_id, verified_at DESC, id DESC
         ), latest_action AS (
             SELECT DISTINCT ON (target_user_id) target_user_id, action
@@ -56,11 +80,12 @@ def change_access(database: Any, *, actor_user_id: int, target_user_id: int, act
             FROM app_auth.app_user app_user
             JOIN latest_snapshot snapshot ON snapshot.app_user_id = app_user.id
             LEFT JOIN latest_action action ON action.target_user_id = snapshot.app_user_id
-            WHERE snapshot.effective_role = 'admin' AND snapshot.verified_at >= now() - interval '24 hours'
+            WHERE (snapshot.verified_admin OR snapshot.effective_role = 'admin')
+              AND snapshot.verified_at >= now() - interval '24 hours'
               AND coalesce(action.action, 'restore') = 'restore'
             FOR UPDATE OF app_user
         ), target AS (
-            SELECT app_user.id, snapshot.effective_role, snapshot.verified_at,
+            SELECT app_user.id, snapshot.effective_role, snapshot.verified_admin, snapshot.verified_at,
                    coalesce(latest.action, 'restore') AS access_state
             FROM app_auth.app_user app_user
             LEFT JOIN latest_snapshot snapshot ON snapshot.app_user_id = app_user.id
@@ -69,8 +94,10 @@ def change_access(database: Any, *, actor_user_id: int, target_user_id: int, act
             FOR UPDATE OF app_user
         )
         SELECT (SELECT count(*) FROM active_admins) AS admins,
-               target.id AS target_id, target.effective_role,
-               target.verified_at, target.access_state
+               target.id AS target_id, target.effective_role, target.verified_admin,
+               target.verified_at,
+               (target.verified_at >= now() - interval '24 hours') AS recently_verified,
+               target.access_state
         FROM target
     """, (target_user_id,)).fetchone()
     if not state or state.get("target_id") is None:
@@ -78,14 +105,16 @@ def change_access(database: Any, *, actor_user_id: int, target_user_id: int, act
     before = {
         "access_state": state.get("access_state"),
         "effective_role": state.get("effective_role"),
+        "verified_admin": bool(state.get("verified_admin") or state.get("effective_role") == "admin"),
         "verified_at": str(state.get("verified_at") or ""),
+        "recently_verified": bool(state.get("recently_verified")),
     }
     if state.get("access_state") == action:
         raise AccessRosterError(f"User access is already {action}d")
     target_is_active_admin = (
-        state.get("effective_role") == "admin"
+        bool(state.get("verified_admin") or state.get("effective_role") == "admin")
         and state.get("access_state") == "restore"
-        and state.get("verified_at") is not None
+        and state.get("recently_verified") is True
     )
     if action == "revoke" and target_is_active_admin and int(state.get("admins") or 0) <= 1:
         raise AccessRosterError("Cannot revoke the last recently verified active administrator")

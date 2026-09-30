@@ -13,7 +13,7 @@ const baseNav = [
   { href: "/", label: "Overview", icon: Activity },
   { href: "/inventory", label: "Inventory", icon: Database },
   { href: "/service-catalog", label: "Service Catalog", icon: UsersRound },
-  { href: "/poam", label: "POA&M", icon: ClipboardCheck },
+  { href: "/poam", label: "Risk Assessment", icon: ClipboardCheck },
 ];
 
 type AssignedScope = {
@@ -26,6 +26,11 @@ type AssignedScope = {
 };
 
 type Identity = AuthMeResponse & { assigned_scope?: AssignedScope };
+type IdentityLoadError = {
+  status: number;
+  detail: string;
+  requestId?: string;
+};
 type ScopeContextValue = {
   mode: "assigned" | "portfolio";
   selected?: AssignedScopePair;
@@ -94,12 +99,29 @@ function pathRequiresWorkspace(pathname: string) {
   return pathname === "/inventory" || pathname === "/service-catalog" || pathname === "/reviews";
 }
 
+function identityLoadError(response: Response): IdentityLoadError {
+  // Identity-provider and proxy errors can contain operational details. Keep
+  // the status and a safe request ID for support without showing that body.
+  const detail = response.status === 401
+    ? "Your sign-in has expired. Sign in again to continue."
+    : response.status === 403
+    ? "Access could not be verified for this account. Contact an administrator if this continues."
+    : "Access verification is temporarily unavailable. Refresh this page to try again.";
+  const requestId = response.headers.get("x-request-id")?.trim();
+  return {
+    status: response.status,
+    detail,
+    ...(requestId && /^[A-Za-z0-9._-]{1,128}$/.test(requestId) ? { requestId } : {}),
+  };
+}
+
 export function ConsoleShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [dark, setDark] = useState(false);
   const [compact, setCompact] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [identity, setIdentity] = useState<Identity | null | undefined>(undefined);
+  const [identityError, setIdentityError] = useState<IdentityLoadError | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [modeChooserOpen, setModeChooserOpen] = useState(false);
@@ -113,8 +135,13 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
       window.sessionStorage.removeItem(ACCESS_MODE_STORAGE_KEY);
       response = await fetch("/api/v1/auth/me", { cache: "no-store" });
     }
-    const nextIdentity = response.ok ? await response.json() as Identity : null;
-    if (!nextIdentity) { setIdentity(null); setIsAdmin(false); return null; }
+    if (!response.ok) {
+      setIdentityError(identityLoadError(response));
+      setIdentity(null); setIsAdmin(false);
+      return null;
+    }
+    const nextIdentity = await response.json() as Identity;
+    setIdentityError(null);
     setIdentity(nextIdentity);
     // `effective_role` is computed by the API after it validates the selected
     // mode header against verified IdP claims. The stored browser choice is
@@ -133,7 +160,7 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
     const useDark = stored ? stored === "dark" : prefersDark;
     document.documentElement.classList.toggle("dark", useDark);
     const update = window.setTimeout(() => setDark(useDark), 0);
-    const identityLoad = window.setTimeout(() => { void loadIdentity().catch(() => { setIdentity(null); setIsAdmin(false); }); }, 0);
+    const identityLoad = window.setTimeout(() => { void loadIdentity().catch(() => { setIdentityError({ status: 0, detail: "Access verification is temporarily unavailable. Refresh this page to try again." }); setIdentity(null); setIsAdmin(false); }); }, 0);
     return () => { window.clearTimeout(update); window.clearTimeout(identityLoad); };
   }, []);
   useEffect(() => {
@@ -181,8 +208,8 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
     : !productScopedDetailEvidence && pairs.length
     ? "Product evidence attribution is pending. Detailed service evidence stays unavailable until the API enables product partition enforcement."
     : detailAccess
-    ? `All ${pairs.length} verified service scope${pairs.length === 1 ? "" : "s"} are available together in this product workspace. Evidence panels retain their exact product attribution; Overview and POA&M show aggregate portfolio summaries.`
-    : "This account can view aggregate portfolio summaries only. Detailed records, evidence, and exports are unavailable.";
+    ? `All ${pairs.length} verified service scope${pairs.length === 1 ? "" : "s"} are available together in this product workspace. Evidence panels retain their exact product attribution; Overview and Risk Assessment show aggregate portfolio summaries.`
+    : "This account can view portfolio totals and shared Risk Assessment planning. Service evidence and exports require assigned access.";
   const toggleTheme = () => {
     setDark((current) => {
       const next = !current;
@@ -235,7 +262,7 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
             <button className="icon-button" type="button" onClick={toggleTheme} aria-label={dark ? "Switch to light theme" : "Switch to dark theme"}>{dark ? <Sun size={17} /> : <Moon size={17} />}</button>
           </div>
         </header>
-        <main id="main-content" tabIndex={-1}>{identity === undefined || modeSelectionRequired ? <ScopeLoading /> : summaryAccess ? <ScopeContext.Provider key={activeMode ?? "unselected"} value={{ mode: access === "portfolio" ? "portfolio" : "assigned", selected, pairs, summaryAccess, detailAccess, assignedWorkspaceAccess, isAdmin, canProposeReview, canDecideReview, productScopedDetailEvidence, operationalEvidenceNotes, reviewProposals, activeMode }}>{pathRequiresWorkspace(pathname) && !assignedWorkspaceAccess ? <DetailUnavailable productPending={!productScopedDetailEvidence && pairs.length > 0} /> : pathname === "/admin" && !isAdmin ? <DetailUnavailable admin /> : children}</ScopeContext.Provider> : <ScopeUnavailable empty={false} denied={identity?.access?.revoked || identity?.assigned_scope?.enforcement === "denied"} configurationRequired={false} />}</main>
+        <main id="main-content" tabIndex={-1}>{identity === undefined || modeSelectionRequired ? <ScopeLoading /> : summaryAccess ? <ScopeContext.Provider key={activeMode ?? "unselected"} value={{ mode: access === "portfolio" ? "portfolio" : "assigned", selected, pairs, summaryAccess, detailAccess, assignedWorkspaceAccess, isAdmin, canProposeReview, canDecideReview, productScopedDetailEvidence, operationalEvidenceNotes, reviewProposals, activeMode }}>{pathRequiresWorkspace(pathname) && !assignedWorkspaceAccess ? <DetailUnavailable productPending={!productScopedDetailEvidence && pairs.length > 0} /> : pathname === "/admin" && !isAdmin ? <DetailUnavailable admin /> : children}</ScopeContext.Provider> : <ScopeUnavailable empty={false} denied={identity?.access?.revoked || identity?.assigned_scope?.enforcement === "denied"} configurationRequired={false} error={identityError} />}</main>
       </div>
       <nav className="mobile-nav" aria-label="Mobile navigation">
         {mobilePrimaryNav.map(({ href, label, icon: Icon }) => <Link key={href} href={href} className={cn("mobile-nav-link", pathname === href && "mobile-nav-active")} aria-current={pathname === href ? "page" : undefined}><Icon size={18} /><span>{label}</span></Link>)}
@@ -255,7 +282,7 @@ const MODE_DETAILS: Record<AccessMode, { label: string; detail: string; Icon: ty
   admin: { label: "Admin", detail: "All product and administration views", Icon: ShieldCheck },
   product_lead: { label: "Product Lead", detail: "All assigned product views", Icon: Wrench },
   product_engineer: { label: "Product Engineer", detail: "All assigned product views with read-only access", Icon: Shield },
-  summary: { label: "Summary viewer", detail: "Aggregate Overview and POA&M summaries", Icon: UserRound },
+  summary: { label: "Summary viewer", detail: "Portfolio totals and shared Risk Assessment planning", Icon: UserRound },
 };
 
 function modeDetail(mode: AccessMode | null | undefined) {
@@ -278,20 +305,24 @@ function ProfileMenu({ identity, pairs, activeMode, open, onOpenChange, onChoose
   }, [open, onOpenChange]);
   const label = identity.display_name || identity.email || "Signed-in user";
   const options = identity.access?.available_modes ?? [];
-  const groupCount = new Set(pairs.map((pair) => pair.serviceGroup)).size;
+  const services = [...new Map(pairs.map((pair) => {
+    const key = `${pair.sourceCollection}/${pair.serviceGroup}`;
+    return [key, { key, label: `${serviceGroupDisplayName(pair.serviceGroup)} · ${pair.sourceCollection}` }];
+  })).values()].sort((left, right) => left.label.localeCompare(right.label));
+  const groupCount = services.length;
+  const productContextCount = new Set(pairs.map((pair) => `${pair.sourceCollection}/${pair.serviceGroup}/${pair.productScopeId ?? "portfolio"}`)).size;
   const verifiedGroups = identity.access?.matched_groups ?? [];
-  const serviceNames = [...new Set(pairs.map((pair) => pair.serviceGroup))]
-    .sort().map(serviceGroupDisplayName);
+  const isLocalDevelopment = identity.kind === "local";
   return <div className="profile-menu" ref={containerRef}>
     <button ref={triggerRef} className="profile-trigger" type="button" aria-label="Open user profile" aria-haspopup="dialog" aria-expanded={open} aria-controls="user-profile-panel" onClick={() => onOpenChange(!open)}><UserRound size={17} /><span className="profile-trigger-name">{label}</span></button>
     {open ? <section id="user-profile-panel" className="profile-panel" role="dialog" aria-label="Signed-in user profile">
       <header><div className="profile-avatar" aria-hidden="true">{label.slice(0, 1).toUpperCase()}</div><div><strong>{label}</strong><span>{identity.email || "Verified local development identity"}</span></div><button ref={closeRef} type="button" className="profile-close" aria-label="Close user profile" onClick={() => onOpenChange(false)}><X size={15} /></button></header>
       <div className="profile-current"><span>Active access</span><strong>{detail?.label || "Access being verified"}</strong><small>{detail?.detail}</small></div>
-      <div className="profile-coverage"><span>Access coverage</span><strong>{activeMode === "admin" ? "All products and services" : groupCount ? `${groupCount} service group${groupCount === 1 ? "" : "s"} across assigned products` : "Aggregate summaries"}</strong></div>
-      {verifiedGroups.length ? <details className="profile-entitlements"><summary>Verified groups ({verifiedGroups.length})</summary><ul>{verifiedGroups.map((group) => <li key={group}>{group}</li>)}</ul></details> : null}
-      {serviceNames.length && activeMode !== "admin" ? <details className="profile-entitlements"><summary>Assigned services ({serviceNames.length})</summary><ul>{serviceNames.map((service) => <li key={service}>{service}</li>)}</ul></details> : null}
-      {options.length > 1 ? <div className="profile-mode-switch"><span>Switch access mode</span>{options.map((mode) => <button key={mode} type="button" className={mode === activeMode ? "profile-mode-active" : ""} onClick={() => onChooseMode(mode)}>{MODE_DETAILS[mode].label}{mode === activeMode ? <small>Active</small> : null}</button>)}</div> : null}
-      <p className="profile-note">Your available modes are derived from verified identity-provider groups. Changing mode never expands your permissions.</p>
+      <div className="profile-coverage"><span>Access coverage</span><strong>{activeMode === "admin" ? "All products and services" : groupCount ? `${groupCount} service group${groupCount === 1 ? "" : "s"} · ${productContextCount} product context${productContextCount === 1 ? "" : "s"}` : "Shared portfolio views"}</strong></div>
+      {isLocalDevelopment ? <div className="profile-entitlements"><strong>Local development access</strong><p>This localhost session is configured locally and is not based on identity-provider groups.</p></div> : verifiedGroups.length ? <details className="profile-entitlements"><summary>Recognized access groups ({verifiedGroups.length})</summary><p>Groups recognized by the access policy from this signed identity claim.</p><ul>{verifiedGroups.map((group) => <li key={group}>{group}</li>)}</ul></details> : null}
+      {services.length && activeMode !== "admin" ? <details className="profile-entitlements"><summary>Assigned services ({services.length})</summary><ul>{services.map((service) => <li key={service.key}>{service.label}</li>)}</ul></details> : null}
+      {options.length > 1 ? <div className="profile-mode-switch"><span>Available workspaces ({options.length})</span>{options.map((mode) => <button key={mode} type="button" className={mode === activeMode ? "profile-mode-active" : ""} onClick={() => onChooseMode(mode)}>{MODE_DETAILS[mode].label}{mode === activeMode ? <small>Active</small> : null}</button>)}</div> : null}
+      <p className="profile-note">{isLocalDevelopment ? "This local development session is available only in localhost mode." : "Your available modes are derived from verified identity-provider groups. Changing mode never expands your permissions."}</p>
     </section> : null}
   </div>;
 }
@@ -323,14 +354,14 @@ function AccessModeChooser({ identity, activeMode, changingMode, error, onChoose
   </section></div>;
 }
 
-function ScopeUnavailable({ empty, denied, configurationRequired }: { empty: boolean; denied: boolean; configurationRequired: boolean }) {
-  const title = empty ? "No assigned service groups" : "Access unavailable";
-  const detail = empty ? "No service groups are available for this account." : configurationRequired ? "Portfolio oversight requires configured service groups." : denied ? "You do not have access to this service group." : "No effective assigned scope is available for this account.";
-  return <div className="page-container"><section className="scope-gate scope-gate-unavailable" role="alert"><LockKeyhole size={20} /><div><h1>{title}</h1><p>{detail}</p></div></section></div>;
+function ScopeUnavailable({ empty, denied, configurationRequired, error }: { empty: boolean; denied: boolean; configurationRequired: boolean; error?: IdentityLoadError | null }) {
+  const title = error ? "Unable to verify access" : empty ? "No assigned service groups" : "Access unavailable";
+  const detail = error ? error.detail : empty ? "No service groups are available for this account." : configurationRequired ? "Portfolio oversight requires configured service groups." : denied ? "You do not have access to this service group." : "No effective assigned scope is available for this account.";
+  return <div className="page-container"><section className="scope-gate scope-gate-unavailable" role="alert"><LockKeyhole size={20} /><div><h1>{title}</h1><p>{detail}</p>{error && (error.status || error.requestId) ? <small>{error.status ? `HTTP ${error.status}` : ""}{error.requestId ? `${error.status ? " · " : ""}Request ID ${error.requestId}` : ""}</small> : null}</div></section></div>;
 }
 
 function DetailUnavailable({ admin = false, productPending = false }: { admin?: boolean; productPending?: boolean }) {
-  return <div className="page-container"><section className="scope-gate scope-gate-unavailable" role="alert"><LockKeyhole size={20} /><div><h1>{admin ? "Administrator access required" : productPending ? "Product evidence attribution pending" : "Detailed service access required"}</h1><p>{admin ? "This workspace is limited to verified fedsse-admins access." : productPending ? "Detailed product evidence remains unavailable until the API confirms attribution and partition enforcement. Aggregate summaries remain available." : "Your current access provides aggregate summaries only."}</p></div></section></div>;
+  return <div className="page-container"><section className="scope-gate scope-gate-unavailable" role="alert"><LockKeyhole size={20} /><div><h1>{admin ? "Administrator access required" : productPending ? "Product evidence attribution pending" : "Detailed service access required"}</h1><p>{admin ? "This workspace is limited to verified fedsse-admins access." : productPending ? "Detailed product evidence remains unavailable until the API confirms attribution and partition enforcement. Overview and Risk Assessment planning remain available." : "Overview and Risk Assessment planning remain available with your current access."}</p></div></section></div>;
 }
 
 export function DisclosureInfo({ label, text }: { label: string; text: string }) {

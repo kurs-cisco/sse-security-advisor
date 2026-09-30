@@ -52,5 +52,9 @@ export const GET = proxy;
 export const HEAD = proxy;
 export const OPTIONS = proxy;
 export const POST = proxy;
+// Service Catalog maintains authoritative administrative metadata with PUT.
+// Keep this catch-all route's verb exports aligned with the FastAPI surface;
+// otherwise Next.js returns 405 before the request reaches the API.
+export const PUT = proxy;
 export const PATCH = proxy;
 export const DELETE = proxy;

@@ -14,8 +14,8 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
   including authorized Admin mutations, must use the same-origin `/api/*`
   proxy; do not expose PostgreSQL, the internal FastAPI origin, AWS credentials,
   or application bearer tokens to the browser.
-- Preserve the four primary read views—Overview, Inventory, Accountability, and
-  POA&M—and the administrator-only Admin workspace. Candidate findings and
+- Preserve the four primary read views—Overview, Inventory, Service Catalog, and
+  Risk Assessment—and the administrator-only Admin workspace. Candidate findings and
   evidence requests must remain visually and semantically distinct.
 - Admin corpus ingestion must send only manifest/job-control requests through
   the proxy. File bytes upload directly to checksum-bound presigned private-S3

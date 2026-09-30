@@ -31,6 +31,12 @@ ALLOWED_TOKEN_SCOPES = frozenset(
         "tokens:admin",
     }
 )
+_OIDC_GROUPS_MAX_RAW_BYTES = 32_768
+_OIDC_GROUPS_MAX_ENTRIES = 1_024
+_OIDC_GROUPS_MAX_ENTITLEMENT_ENTRIES = 128
+_OIDC_GROUP_MAX_LENGTH = 256
+_OIDC_ENTITLEMENT_PREFIX = "fedsse-"
+_OIDC_ENTITLEMENT_PATTERN = re.compile(r"fedsse-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 
 
 @dataclass(frozen=True)
@@ -70,22 +76,52 @@ def generate_api_token() -> tuple[str, str, str]:
     return credential_id, token, token_digest(token)
 
 
+def _verified_oidc_groups(raw_groups: str) -> frozenset[str]:
+    """Keep exact CBOM entitlement candidates from a signed OIDC group claim.
+
+    Unrelated directory groups are not authorization inputs.  They must not
+    make a valid CBOM entitlement fail merely by exceeding a small total-group
+    limit.  The JSON shape remains strict, parsing remains bounded, and a
+    malformed value in the reserved entitlement namespace fails closed.
+    """
+    if len(raw_groups.encode("utf-8")) > _OIDC_GROUPS_MAX_RAW_BYTES:
+        raise AccessDenied("groups_claim_too_large", 401)
+    try:
+        parsed_groups = json.loads(raw_groups) if raw_groups else []
+    except ValueError as error:
+        raise AccessDenied("groups_claim_invalid_json", 401) from error
+    if not isinstance(parsed_groups, list):
+        raise AccessDenied("groups_claim_invalid_shape", 401)
+    if len(parsed_groups) > _OIDC_GROUPS_MAX_ENTRIES:
+        raise AccessDenied("groups_claim_too_many_entries", 401)
+    if any(not isinstance(group, str) for group in parsed_groups):
+        raise AccessDenied("groups_claim_invalid_member", 401)
+
+    entitlements: list[str] = []
+    for group in parsed_groups:
+        # Treat a whitespace-wrapped reserved name as malformed rather than
+        # silently downgrading it to an unrelated directory value.  The value
+        # itself is never trimmed or otherwise normalized for authorization.
+        if (
+            not group.startswith(_OIDC_ENTITLEMENT_PREFIX)
+            and not group.strip().startswith(_OIDC_ENTITLEMENT_PREFIX)
+        ):
+            continue
+        if len(group) > _OIDC_GROUP_MAX_LENGTH or not _OIDC_ENTITLEMENT_PATTERN.fullmatch(group):
+            raise AccessDenied("groups_claim_invalid_entitlement", 401)
+        entitlements.append(group)
+    if len(entitlements) > _OIDC_GROUPS_MAX_ENTITLEMENT_ENTRIES:
+        raise AccessDenied("groups_claim_too_many_entitlements", 401)
+    return frozenset(entitlements)
+
+
 def _resolve_human(request: Request) -> Principal:
     issuer = request.headers.get("x-cbom-user-issuer", "").strip()
     subject = request.headers.get("x-cbom-user-sub", "").strip()
     email = request.headers.get("x-cbom-user-email", "").strip().casefold()
     display_name = request.headers.get("x-cbom-user-name", "").strip() or None
     raw_groups = request.headers.get("x-cbom-user-groups", "").strip()
-    try:
-        parsed_groups = json.loads(raw_groups) if raw_groups else []
-    except ValueError as error:
-        raise AccessDenied("Verified OIDC groups claim is invalid", 401) from error
-    if not isinstance(parsed_groups, list) or len(parsed_groups) > 200 or any(
-        not isinstance(group, str) or not group or group != group.strip() or len(group) > 256
-        for group in parsed_groups
-    ):
-        raise AccessDenied("Verified OIDC groups claim is invalid", 401)
-    oidc_groups = frozenset(parsed_groups)
+    oidc_groups = _verified_oidc_groups(raw_groups)
     if not issuer or not subject or not email:
         raise AccessDenied("Verified OIDC subject and email are required", 401)
 

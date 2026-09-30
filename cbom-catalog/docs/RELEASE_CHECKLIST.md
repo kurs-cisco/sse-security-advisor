@@ -45,8 +45,18 @@ unscoped or ungranted reads and global operational routes must return 403.
 Verify all administrator methods reject an assigned-only principal. The live
 review may use a temporary read-only database connection and review-only grant
 configuration; it must not modify ingestion, planning, assessment, or user data.
-Target-module and Team Tracker planning views remain unavailable to assigned
-lead/engineer pairs until their immutable records carry collection provenance.
+The POA&M Planning and Team milestones projections are read-only and shared
+across signed dashboard roles. Raw Team Tracker APIs, evidence detail, and
+candidate APIs remain restricted by their existing gates.
+Before each cloud release, exercise `/api/v1/portfolio/poam-planning` through
+an actual summary-only signed session against current managed Service Catalog
+rows. Both IL2 and IL5 target dates must return ISO strings, and the Planning
+and Team milestones views must load without a 500. A local imported-only
+Catalog is insufficient for this check because it can supply string dates where
+managed PostgreSQL rows supply `date` objects.
+Compare the completed Planning count across Summary, Lead, Engineer, and Admin
+modes; the Admin badge must stay pending until its Catalog and register requests
+finish instead of displaying a partial tracker count.
 Service Catalog shows only exact-grant service rows to assigned roles. The
 reviewed Team Tracker baseline applies to `sse-cboms` only; service-impact
 values use their recorded collection/group. A same-named group in another
@@ -70,7 +80,7 @@ fingerprints.
 
 For Service Catalog, apply migrations 022–024 before enabling
 `enableServiceCatalog`. Confirm the table contains the existing 40 service
-groups with imported Admin-only planning context and distinguishes managed
+groups with imported planning context and distinguishes managed
 revisions from imported values. Check Add, Edit, approval review, exact scoped
 Lead proposals, read-only Engineer mode, and Summary denial. Test create,
 publish, proposal, approval, rejection, stale revision, and self-approval
@@ -111,9 +121,10 @@ labels must not appear as ATO, CMVP, or FIPS validation evidence.
 For the staged OIDC group rollout, verify exact `fedsse-admins`,
 `fedsse-external`, `fedsse-scr2-leads`, service lead, and service engineer
 claims with separate Chrome sessions or Playwright fixtures. An unmatched
-signed-in user must see no catalog data. External and SCR2 users may see only
-numeric all-service Overview and POA&M summaries; direct Inventory,
-Service Catalog, candidate details, exports, and raw APIs must deny access.
+signed-in user must see no catalog data. External and SCR2 users may see
+all-service Overview and POA&M summaries plus read-only POA&M Planning and
+Team milestones. Direct Inventory, Service Catalog, candidate details,
+exports, and raw tracker APIs must deny access.
 Leads and engineers may see the same aggregates and their verified grant cards;
 when the product-detail capability is enabled, detail must stay within their
 exact collection/service/ATO grants. Check mixed memberships and direct ID
@@ -145,6 +156,13 @@ remain incomplete.
       to an internal path.
 - [ ] Overview counts/charts load, refresh works, and light/dark modes remain
       legible.
+- [ ] In a signed Summary session, Overview shows aggregate Catalog processing
+      and component-category counts without service, document, component, or
+      library identifiers. The former identifier-withholding panels must not
+      appear. Summary attention rows must not link to restricted Inventory.
+      A failed Overview or shared Planning request shows a retry message rather
+      than a raw API, IdP, or load-balancer response, and a failed refresh does
+      not leave stale counts presented as current.
 - [ ] Inventory service, library, and heatmap views filter, sort, page, and open
       document/component drawers.
 - [ ] Service Catalog lists all collection/service rows in Admin mode and only
@@ -160,9 +178,37 @@ remain incomplete.
 - [ ] Target-module planning assertions are visibly labeled as non-findings;
       asserted active-certificate badges reflect verification conflicts instead
       of implying validation.
+- [ ] Service Catalog module plans offer only exact module/version public
+      references from the active evidence import. Verify certificate-backed and
+      vendor-pipeline references, immutable imported-row matching, unverified
+      custom targets, Lead proposal, separate Admin approval, and read-only
+      Engineer/Summary Planning. Replace active public evidence in an isolated
+      test database and confirm a stale approved plan stays visible but no
+      longer enters active or pipeline lanes. Confirm a same-named group in
+      another source collection cannot receive the plan. Public certificate and
+      vendor statements do not establish deployment or service FIPS validation.
+- [ ] In Service Catalog detail, confirm an approved plan shows the saved
+      current and target module identities, live `evidence_state`, planning
+      disposition, basis, and source URL. Replace a preset's public evidence
+      in an isolated test database while reusing its key: the saved target must
+      remain visible and the old evidence must render as superseded, not as
+      the replacement option's module. Missing evidence state remains
+      unverified. Certificate and pipeline comparisons require exact module
+      versions, including rejection of a `+vendor-patch` suffix.
 - [ ] POA&M workstream/candidate views, coverage gaps, filters, paging, drawers,
       and compliance ZIP/workstream CSV/asset CSV downloads follow the active
       assessment-contract gate.
+- [ ] Risk Assessment opens its read-only POA&M subtab for each signed dashboard
+      role. Confirm its impact chips report Critical, Moderate, and Other
+      service-group counts and distinct current catalog document-record counts,
+      without exposing group, owner, or lead identities in the POA&M response.
+      Changing a Catalog date or risk category must change the counts after
+      Refresh; planning windows must not invent a completion date. Every row
+      remains noneligible and must not enable candidate exports or writes.
+      Planning and Team milestones remain available to summary-only roles.
+      Include representative imported and managed planning states with matching
+      dates; exclude `not_applicable` and non-date rows even if a stale date
+      remains. Verify this against the signed cloud Service Catalog after release.
 - [ ] Exact `fedsse-admins` membership enables Admin; unmatched, external, and
       engineer accounts cannot see Admin or mutate catalog state.
 - [ ] Product-scoped catalog detail verifies the current source SHA-256 routing

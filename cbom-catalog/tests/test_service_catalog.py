@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import unittest
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -66,6 +68,204 @@ class ServiceCatalogTests(unittest.TestCase):
             normalized_change({"owner_profile_email": "Owner@Example.test", "il2_status": "planned"}),
             {"owner_profile_email": "owner@example.test", "il2_status": "planned"},
         )
+
+    def test_crypto_plan_requires_one_target_and_bounded_supporting_evidence(self) -> None:
+        preset = {
+            "current_module": "OpenSSL", "current_version": "3.0.0",
+            "target_preset_id": "cmvp-4985", "source_record_sha256": "a" * 64,
+        }
+        normalized = normalized_change({"crypto_module_plans": [preset]})["crypto_module_plans"]
+        self.assertEqual(normalized[0]["target_preset_id"], "cmvp-4985")
+        self.assertEqual(normalized[0]["source_record_sha256"], "a" * 64)
+        custom = {
+            "current_module": "Python cryptography", "custom_target_module": "Vendor OpenSSL provider",
+            "custom_target_version": "1.2.3", "supporting_url": "https://vendor.example/module",
+            "evidence_basis": "vendor_recommendation",
+        }
+        self.assertEqual(
+            normalized_change({"crypto_module_plans": [custom]})["crypto_module_plans"][0]["evidence_basis"],
+            "vendor_recommendation",
+        )
+        for invalid in (
+            {**preset, "cmvp_certificate": "#4985"},
+            {**preset, "custom_target_module": "Other module"},
+            {**custom, "supporting_url": "http://vendor.example/module"},
+            {**custom, "supporting_url": "https://user:secret@vendor.example/module"},
+            {**custom, "custom_target_version": ""},
+        ):
+            with self.subTest(invalid=invalid), self.assertRaises(ServiceCatalogError):
+                normalized_change({"crypto_module_plans": [invalid]})
+
+    def test_curated_catalog_plan_snapshots_public_reference_not_deployment_proof(self) -> None:
+        payload = normalized_change({"crypto_module_plans": [{
+            "current_module": "OpenSSL", "target_preset_id": "cmvp-4985",
+        }]})
+        evidence = {
+            "evidence_key": "cmvp-4985", "module_name": "OpenSSL FIPS Provider",
+            "module_version": "3.1.2", "certificate_number": "#4985",
+            "public_status": "active", "source_kind": "cmvp_certificate",
+            "source_url": "https://csrc.nist.gov/projects/cryptographic-module-validation-program/certificate/4985",
+            "payload_sha256": "b" * 64, "authority": "NIST CMVP",
+        }
+        with patch.object(api, "_active_public_module_evidence", return_value=[evidence]):
+            enriched = api._resolve_catalog_crypto_plans(
+                MagicMock(), payload, source_collection="sse-cboms", service_group="dlp",
+            )["crypto_module_plans"][0]
+        self.assertEqual(enriched["target_module"], "OpenSSL FIPS Provider")
+        self.assertEqual(enriched["cmvp_certificate"], "#4985")
+        self.assertEqual(enriched["evidence_payload_sha256"], "b" * 64)
+        self.assertEqual(enriched["evidence_grade"], "user_asserted")
+        self.assertTrue(enriched["review_required"])
+
+    def test_catalog_plan_projection_uses_current_evidence_without_mutating_plan(self) -> None:
+        """Catalog reads re-evaluate approved plans against the active import."""
+        principal = api.Principal(kind="human", subject="oidc:admin", role="admin", scopes=frozenset(), user_id=1)
+        request = SimpleNamespace(
+            state=SimpleNamespace(
+                principal=principal, request_id="request-1",
+                assigned_scope={"mode": "portfolio", "role": "admin", "grants": []},
+            ),
+        )
+        row = self._catalog_row("sse-cboms", "brain")
+        current_plan = {
+            "target_preset_id": "cmvp-4985",
+            "target_module": "OpenSSL FIPS Provider",
+            "target_version": "3.1.2",
+            "cmvp_certificate": "#4985",
+            "evidence_url": "https://example.test/cmvp/4985",
+            "evidence_payload_sha256": "a" * 64,
+        }
+        superseded_plan = {**current_plan, "evidence_payload_sha256": "b" * 64}
+        row["crypto_module_plans"] = [current_plan, superseded_plan]
+        evidence = [{
+            # SQL row keys deliberately differ from the evaluator contract.
+            "evidence_key": "cmvp-4985",
+            "source_url": "https://example.test/cmvp/4985",
+            "payload_sha256": "a" * 64,
+            "source_kind": "cmvp_certificate",
+            "module_name": "OpenSSL FIPS Provider",
+            "module_version": "3.1.2",
+            "certificate_number": "#4985",
+            "public_status": "active",
+        }]
+        with (
+            patch.object(api, "_service_catalog_enabled", return_value=True),
+            patch.object(api, "_fetch_all", return_value=[row]),
+            patch.object(api, "_active_target_module_contract", return_value=None),
+            patch.object(api, "team_milestones", return_value=self._tracker_profiles()),
+            patch.object(api, "_active_service_impact_map", return_value={}),
+            patch.object(api, "_active_public_module_evidence", return_value=evidence),
+        ):
+            plans = api._catalog_rows(request)[0]["crypto_module_plans"]
+
+        self.assertEqual(plans[0]["planning_disposition"], "active_certificate")
+        self.assertEqual(plans[0]["evidence_state"], "current")
+        self.assertIn("#4985", plans[0]["disposition_basis"])
+        self.assertEqual(plans[1]["planning_disposition"], "planned_unverified")
+        self.assertEqual(plans[1]["evidence_state"], "evidence_superseded")
+        self.assertNotIn("planning_disposition", current_plan)
+        self.assertNotIn("evidence_state", superseded_plan)
+
+    def test_imported_module_identity_is_server_verified_at_submission_and_approval(self) -> None:
+        source_hash = "a" * 64
+        database = MagicMock()
+        database.execute.return_value.fetchone.return_value = {
+            "record_sha256": source_hash,
+            "current_module": "OpenSSL",
+            "current_version": "3.0.0",
+        }
+        evidence = {
+            "evidence_key": "cmvp-4985", "module_name": "OpenSSL FIPS Provider",
+            "module_version": "3.1.2", "certificate_number": "#4985",
+            "public_status": "active", "source_kind": "cmvp_certificate",
+            "source_url": "https://csrc.nist.gov/projects/cryptographic-module-validation-program/certificate/4985",
+            "payload_sha256": "b" * 64, "authority": "NIST CMVP",
+        }
+        with patch.object(api, "_active_public_module_evidence", return_value=[evidence]):
+            for field, incorrect in (("current_module", "Go"), ("current_version", "9.9")):
+                plan = {
+                    "source_record_sha256": source_hash,
+                    "current_module": "OpenSSL", "current_version": "3.0.0",
+                    "target_preset_id": "cmvp-4985",
+                }
+                plan[field] = incorrect
+                with self.subTest(field=field), self.assertRaises(api.HTTPException) as error:
+                    api._resolve_catalog_crypto_plans(
+                        database, normalized_change({"crypto_module_plans": [plan]}),
+                        source_collection="sse-cboms", service_group="dlp",
+                    )
+                self.assertEqual(error.exception.status_code, 422)
+            correct = normalized_change({"crypto_module_plans": [{
+                "source_record_sha256": source_hash,
+                "current_module": "OpenSSL", "current_version": "3.0.0",
+                "target_preset_id": "cmvp-4985",
+            }]})
+            enriched = api._resolve_catalog_crypto_plans(
+                database, correct, source_collection="sse-cboms", service_group="dlp",
+            )
+            self.assertEqual(enriched["crypto_module_plans"][0]["current_module"], "OpenSSL")
+            self.assertEqual(enriched["crypto_module_plans"][0]["current_version"], "3.0.0")
+            api._verify_catalog_crypto_plan_references(
+                database, enriched, source_collection="sse-cboms", service_group="dlp",
+            )
+            database.execute.return_value.fetchone.return_value["current_version"] = "3.0.1"
+            with self.assertRaises(api.HTTPException) as stale:
+                api._verify_catalog_crypto_plan_references(
+                    database, enriched, source_collection="sse-cboms", service_group="dlp",
+                )
+            self.assertEqual(stale.exception.status_code, 409)
+
+    def test_custom_catalog_plan_cannot_claim_a_verified_certificate(self) -> None:
+        payload = normalized_change({"crypto_module_plans": [{
+            "current_module": "Python cryptography", "custom_target_module": "Custom provider",
+            "custom_target_version": "2.0", "supporting_url": "https://vendor.example/fips",
+            "evidence_basis": "cmvp_certificate",
+        }]})
+        with patch.object(api, "_active_public_module_evidence", return_value=[]):
+            enriched = api._resolve_catalog_crypto_plans(
+                MagicMock(), payload, source_collection="sse-cboms", service_group="dlp",
+            )["crypto_module_plans"][0]
+        self.assertIsNone(enriched["cmvp_certificate"])
+        self.assertEqual(enriched["public_status"], "user_asserted_unverified")
+        self.assertEqual(enriched["evidence_grade"], "user_asserted")
+
+    def test_proposed_preset_must_remain_the_same_active_public_record(self) -> None:
+        proposal = {"crypto_module_plans": [{
+            "target_preset_id": "cmvp-4985", "evidence_payload_sha256": "a" * 64,
+        }]}
+        with patch.object(api, "_active_public_module_evidence", return_value=[{
+            "evidence_key": "cmvp-4985", "payload_sha256": "b" * 64,
+        }]), self.assertRaises(api.HTTPException) as error:
+            api._verify_catalog_crypto_plan_references(
+                MagicMock(), proposal, source_collection="sse-cboms", service_group="dlp",
+            )
+        self.assertEqual(error.exception.status_code, 409)
+
+    def test_module_options_distinguish_public_certificate_from_vendor_review(self) -> None:
+        rows = [
+            {
+                "evidence_key": "cmvp-4985", "module_name": "OpenSSL FIPS Provider",
+                "module_version": "3.1.2", "certificate_number": "#4985",
+                "public_status": "active", "source_kind": "cmvp_certificate",
+                "source_url": "https://csrc.nist.gov/projects/cryptographic-module-validation-program/certificate/4985",
+                "source_title": "NIST certificate", "authority": "NIST CMVP",
+                "payload_sha256": "a" * 64, "retrieved_on": date(2026, 9, 21), "limitations": [],
+            },
+            {
+                "evidence_key": "openssl-3.5.4-submission", "module_name": "OpenSSL FIPS Object Module",
+                "module_version": "3.5.4", "certificate_number": None,
+                "public_status": "cmvp_review", "source_kind": "vendor_blog",
+                "source_url": "https://openssl-library.org/post/2025-10-09-ossl3.5.4-fips-submission/",
+                "source_title": "OpenSSL submission", "authority": "OpenSSL Corporation",
+                "payload_sha256": "b" * 64, "retrieved_on": date(2026, 9, 21), "limitations": [],
+            },
+        ]
+        with patch.object(api, "_active_public_module_evidence", return_value=rows):
+            options = api._crypto_module_options()
+        self.assertIn("CMVP #4985", options[0]["label"])
+        self.assertEqual(options[0]["certificate_number"], "#4985")
+        self.assertIn("Vendor-reported CMVP review; no certificate", options[1]["label"])
+        self.assertIsNone(options[1]["certificate_number"])
 
     def test_lead_cannot_propose_for_an_unassigned_group(self) -> None:
         request = self._request(self._lead(), [{"access": "lead", "source_collection": "sse-cboms", "service_group": "brain"}])
@@ -310,3 +510,43 @@ class ServiceCatalogTests(unittest.TestCase):
             api._catalog_overridden_fields({"owner": None, "il2_target_date": None}),
             ["owner", "il2_target_date"],
         )
+
+    def test_catalog_revision_snapshots_encode_naive_and_utc_datetimes(self) -> None:
+        """Both the create and update paths must store a JSON-safe revision snapshot."""
+        cases = (
+            (None, 1, datetime(2026, 9, 29, 12, 30, 45), "2026-09-29T12:30:45"),
+            ({"id": 31, "revision": 1}, 2, datetime(2026, 9, 29, 12, 30, 45, tzinfo=timezone.utc), "2026-09-29T12:30:45+00:00"),
+        )
+        for current, revision, updated_at, expected_timestamp in cases:
+            with self.subTest(existing=current is not None, updated_at=updated_at):
+                database = MagicMock()
+                current_cursor = MagicMock()
+                current_cursor.fetchone.return_value = current
+                write_cursor = MagicMock()
+                write_cursor.fetchone.return_value = {"id": 31, "revision": revision, "updated_at": updated_at}
+                snapshot_cursor = MagicMock()
+                snapshot_cursor.fetchone.return_value = {
+                    "revision": revision,
+                    "display_name": "ADC",
+                    "il2_target_date": date(2027, 1, 15),
+                    "updated_at": updated_at,
+                }
+                database.execute.side_effect = [current_cursor, write_cursor, snapshot_cursor, MagicMock()]
+
+                api._upsert_catalog_entry(
+                    database,
+                    collection={"source_collection_id": 7},
+                    service_group="adc",
+                    catalog_service_group_id=9,
+                    change={"owner": "Example owner"},
+                    expected_revision=0 if current is None else 1,
+                    actor_user_id=42,
+                    operation="create" if current is None else "admin_update",
+                    reason="Verify a JSON-safe revision snapshot.",
+                )
+
+                revision_params = database.execute.call_args_list[-1].args[1]
+                snapshot_json = revision_params[4]
+                payload = json.loads(json.dumps(snapshot_json.obj))
+                self.assertEqual(payload["il2_target_date"], "2027-01-15")
+                self.assertEqual(payload["updated_at"], expected_timestamp)
