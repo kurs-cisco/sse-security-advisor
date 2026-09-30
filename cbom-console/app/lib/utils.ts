@@ -11,7 +11,10 @@ export function formatNumber(value: number | null | undefined) {
 
 export function serviceGroupDisplayName(value: string) {
   const withoutEvidenceSuffix = value.replace(/(?:-|_)NO(?:-|_)CBOM$/i, "");
-  if (/^(?:on-prem-clients|on prem \/ clients)$/i.test(withoutEvidenceSuffix)) return "Chromebook Client";
+  // The tracker historically used both a key and several human-readable
+  // variants for this group. Keep all renderers aligned with the approved
+  // Service Catalog display name without changing the underlying key.
+  if (/^(?:on-prem-clients|on[ -]?prem\s*\/\s*clients)$/i.test(withoutEvidenceSuffix)) return "Chromebook Client";
   return withoutEvidenceSuffix.toLocaleLowerCase() === "discovery" ? "Discovery" : withoutEvidenceSuffix;
 }
 
