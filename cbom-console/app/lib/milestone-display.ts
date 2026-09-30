@@ -12,12 +12,17 @@ export type MilestoneRowDisplay = {
   mappedServiceGroups: string[];
 };
 
+function comparableGroupKey(value: string) {
+  return serviceGroupDisplayName(value).toLocaleLowerCase().replaceAll(/[^a-z0-9]/g, "");
+}
+
 /**
- * Team Tracker names are imported planning metadata. When a tracker row maps
- * to exactly one Service Catalog group, show the current authoritative
- * Catalog display name in the milestone register. Multiple-group teams retain
- * their tracker name, while every mapped group still receives the same display
- * normalization used elsewhere in the console.
+ * Team Tracker names are curated imported planning metadata and remain the
+ * Team-column source. A Catalog name replaces a tracker label only when it
+ * differs meaningfully from the service-group key; raw-slug Catalog names do
+ * not erase tracker labels such as ADC, APIX (Authsvc,APIGW), or SWG Proxy.
+ * This gives the approved Chromebook Client name precedence for its legacy
+ * group while preserving existing mapped-group keys elsewhere.
  */
 export function milestoneRowDisplay(
   row: TeamTrackerRow,
@@ -28,13 +33,25 @@ export function milestoneRowDisplay(
       .filter((entry) => entry.source_collection === "sse-cboms" && entry.display_name.trim())
       .map((entry) => [entry.service_group, entry.display_name]),
   );
-  const mappedServiceGroups = (row.mapped_service_groups ?? []).map(
-    (group) => catalogNames.get(group) ?? serviceGroupDisplayName(group),
-  );
+  const catalogLabel = (group: string) => {
+    const catalogName = catalogNames.get(group)?.trim();
+    return catalogName && catalogName !== group
+      ? catalogName
+      : serviceGroupDisplayName(group) === "Chromebook Client"
+        ? "Chromebook Client"
+        : group;
+  };
+  const mappedServiceGroups = (row.mapped_service_groups ?? []).map(catalogLabel);
+  const mappedGroup = row.mapped_service_groups?.[0];
+  const catalogTeamLabel = mappedGroup ? catalogNames.get(mappedGroup)?.trim() : null;
+  // A label that only reformats the group key (for example APIX or SWG Proxy)
+  // belongs in the mapped-group column. Keep the richer tracker Team label.
+  const teamCatalogLabel = mappedServiceGroups.length === 1 && mappedGroup && catalogTeamLabel
+    && comparableGroupKey(catalogTeamLabel) !== comparableGroupKey(mappedGroup)
+    ? catalogTeamLabel
+    : null;
   return {
-    team: mappedServiceGroups.length === 1
-      ? mappedServiceGroups[0]
-      : serviceGroupDisplayName(row.team),
+    team: teamCatalogLabel ?? serviceGroupDisplayName(row.team),
     mappedServiceGroups,
   };
 }

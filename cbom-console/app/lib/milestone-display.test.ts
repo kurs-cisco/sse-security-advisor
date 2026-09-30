@@ -25,3 +25,32 @@ test("Team milestones normalizes a legacy service-group label when no Catalog ro
     mappedServiceGroups: ["Chromebook Client"],
   });
 });
+
+test("Team milestones retains curated tracker team labels and original mapped-group keys", () => {
+  const examples: Array<[string, string, string]> = [
+    ["ADC", "adc", "ADC"],
+    ["APIX (Authsvc,APIGW)", "apix-no-cbom", "APIX (Authsvc,APIGW)"],
+    ["SWG Proxy", "swg-proxy", "SWG Proxy"],
+  ];
+  for (const [team, group, expected] of examples) {
+    assert.deepEqual(milestoneRowDisplay({ ...row, team, mapped_service_groups: [group] }, [
+      { source_collection: "sse-cboms", service_group: group, display_name: group },
+    ]), { team: expected, mappedServiceGroups: [group] });
+  }
+});
+
+test("Team milestones keeps the detailed APIX tracker label when Catalog only formats the group key", () => {
+  assert.deepEqual(milestoneRowDisplay({ ...row, team: "APIX (Authsvc,APIGW)", mapped_service_groups: ["apix-no-cbom"] }, [
+    { source_collection: "sse-cboms", service_group: "apix-no-cbom", display_name: "APIX" },
+  ]), { team: "APIX (Authsvc,APIGW)", mappedServiceGroups: ["APIX"] });
+});
+
+test("Team milestones applies a meaningful Catalog rename while retaining a multi-group tracker label", () => {
+  assert.deepEqual(milestoneRowDisplay({ ...row, team: "APIX (Authsvc,APIGW)", mapped_service_groups: ["apix-no-cbom"] }, [
+    { source_collection: "sse-cboms", service_group: "apix-no-cbom", display_name: "API Experience" },
+  ]), { team: "API Experience", mappedServiceGroups: ["API Experience"] });
+  assert.deepEqual(milestoneRowDisplay({ ...row, team: "Shared platform", mapped_service_groups: ["adc", "swg-proxy"] }, [
+    { source_collection: "sse-cboms", service_group: "adc", display_name: "ADC" },
+    { source_collection: "sse-cboms", service_group: "swg-proxy", display_name: "SWG Proxy" },
+  ]), { team: "Shared platform", mappedServiceGroups: ["ADC", "SWG Proxy"] });
+});
